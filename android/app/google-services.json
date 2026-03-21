@@ -1,0 +1,97 @@
+{
+  "project_info": {
+    "project_number": "241665118590",
+    "firebase_url": "https://trouble-sarthi-default-rtdb.firebaseio.com",
+    "project_id": "trouble-sarthi",
+    "storage_bucket": "trouble-sarthi.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:241665118590:android:68c74407e229588225632f",
+        "android_client_info": {
+          "package_name": "com.example.sarthi_kendra"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "241665118590-dt9453qig25vvdtj90jiokgj32mqf11e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbt0_NpzghXo7lO-AD1oAV7_FnfOPvCUw"
+        },
+        {
+          "current_key": "AIzaSyBH4Xi0xrqWZKQLkxv80rkSBpnVI-AJYvI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "241665118590-dt9453qig25vvdtj90jiokgj32mqf11e.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "241665118590-q93sv6pk702rm3r0gecpqljnceshnn65.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.troubleSarthi"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:241665118590:android:a764c51389038d0025632f",
+        "android_client_info": {
+          "package_name": "com.example.trouble_sarthi"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "241665118590-j2q0gbubupqigouts9cej9n53t11fpsa.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.trouble_sarthi",
+            "certificate_hash": "f3481486256e03037cd564e86cc12ca20916d333"
+          }
+        },
+        {
+          "client_id": "241665118590-dt9453qig25vvdtj90jiokgj32mqf11e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbt0_NpzghXo7lO-AD1oAV7_FnfOPvCUw"
+        },
+        {
+          "current_key": "AIzaSyBH4Xi0xrqWZKQLkxv80rkSBpnVI-AJYvI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "241665118590-dt9453qig25vvdtj90jiokgj32mqf11e.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "241665118590-q93sv6pk702rm3r0gecpqljnceshnn65.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.troubleSarthi"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
