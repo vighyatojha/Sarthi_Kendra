@@ -12,11 +12,16 @@ dependencies:
 
   # Firebase
   firebase_core: ^2.27.0
-  firebase_database: ^10.4.9   # ← this was missing
+  firebase_database: ^10.4.9
   firebase_auth: ^4.17.8
   cloud_firestore: ^4.15.8
   firebase_storage: ^11.6.8
   firebase_messaging: ^14.7.19
+
+  # Google Sign-In  ← ADD THIS (was missing)
+  google_sign_in: ^6.2.1
+  google_maps_flutter: ^2.5.3
+  geolocator: ^12.0.0
 
   # State Management
   provider: ^6.1.2
@@ -47,4 +52,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-

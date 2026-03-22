@@ -1,16 +1,16 @@
 // lib/screens/auth/helper_splash_screen.dart
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/language_provider.dart';
 import 'helper_login_screen.dart';
 import '../dashboard/helper_dashboard.dart';
+import '../language/language_selection_screen.dart';
 
 class HelperSplashScreen extends StatefulWidget {
   const HelperSplashScreen({super.key});
-
   @override
   State<HelperSplashScreen> createState() => _HelperSplashScreenState();
 }
@@ -18,442 +18,244 @@ class HelperSplashScreen extends StatefulWidget {
 class _HelperSplashScreenState extends State<HelperSplashScreen>
     with TickerProviderStateMixin {
 
-  // ── Controllers ───────────────────────────────────────────────
-  late AnimationController _fadeCtrl;
   late AnimationController _logoCtrl;
   late AnimationController _contentCtrl;
-  late AnimationController _orbitCtrl;
-
-  // ── Animations ────────────────────────────────────────────────
-  late Animation<double> _bgFade;
-  late Animation<double> _logoScale;
-  late Animation<double> _logoFade;
-  late Animation<Offset> _titleSlide;
-  late Animation<double> _titleFade;
-  late Animation<double> _taglineFade;
-  late Animation<double> _orbit;
+  late Animation<double>   _logoScale;
+  late Animation<double>   _logoFade;
+  late Animation<double>   _contentFade;
+  late Animation<Offset>   _contentSlide;
 
   @override
   void initState() {
     super.initState();
-    _setupAnimations();
-    _runSequence();
+    _logoCtrl    = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
+    _contentCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+
+    _logoScale  = CurvedAnimation(parent: _logoCtrl, curve: Curves.elasticOut);
+    _logoFade   = CurvedAnimation(parent: _logoCtrl, curve: const Interval(0, 0.4, curve: Curves.easeOut));
+    _contentFade = CurvedAnimation(parent: _contentCtrl, curve: Curves.easeOut);
+    _contentSlide = Tween<Offset>(begin: const Offset(0, 0.18), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _contentCtrl, curve: Curves.easeOutCubic));
+
+    _run();
   }
 
-  void _setupAnimations() {
-    // Background fade in
-    _fadeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
-    _bgFade = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-
-    // Logo elastic pop
-    _logoCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
-    _logoScale = CurvedAnimation(
-      parent: _logoCtrl,
-      curve: Curves.elasticOut,
-    );
-    _logoFade = CurvedAnimation(
-      parent: _logoCtrl,
-      curve: const Interval(0.0, 0.4, curve: Curves.easeOut),
-    );
-
-    // Title + tagline stagger
-    _contentCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 700),
-    );
-    _titleSlide = Tween<Offset>(
-      begin: const Offset(0, 0.3),
-      end:   Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _contentCtrl,
-      curve:  const Interval(0.0, 0.6, curve: Curves.easeOutCubic),
-    ));
-    _titleFade = CurvedAnimation(
-      parent: _contentCtrl,
-      curve:  const Interval(0.0, 0.55, curve: Curves.easeOut),
-    );
-    _taglineFade = CurvedAnimation(
-      parent: _contentCtrl,
-      curve:  const Interval(0.3, 1.0, curve: Curves.easeOut),
-    );
-
-    // Continuous orbit for background particles
-    _orbitCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 8),
-    )..repeat();
-    _orbit = CurvedAnimation(parent: _orbitCtrl, curve: Curves.linear);
-  }
-
-  Future<void> _runSequence() async {
-    _fadeCtrl.forward();
-    await Future.delayed(const Duration(milliseconds: 150));
+  Future<void> _run() async {
+    await Future.delayed(const Duration(milliseconds: 200));
     _logoCtrl.forward();
-    await Future.delayed(const Duration(milliseconds: 400));
+    await Future.delayed(const Duration(milliseconds: 380));
     _contentCtrl.forward();
-
-    // Wait for auth to resolve + small UX buffer
-    await Future.delayed(const Duration(milliseconds: 2000));
+    await Future.delayed(const Duration(milliseconds: 2200));
     _navigate();
   }
 
   void _navigate() {
     if (!mounted) return;
-    final auth  = context.read<AuthProvider>();
-    final route = auth.isLoggedIn
-        ? const HelperDashboard()
-        : const HelperLoginScreen();
+    final auth = context.read<AuthProvider>();
+    final lang = context.read<LanguageProvider>();
 
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        pageBuilder:        (_, a, __) => route,
-        transitionDuration: const Duration(milliseconds: 500),
-        transitionsBuilder: (_, a, __, child) =>
-            FadeTransition(opacity: a, child: child),
-      ),
-    );
+    Widget dest;
+    if (auth.isLoggedIn)       dest = const HelperDashboard();
+    else if (!lang.isSelected) dest = const LanguageSelectionScreen();
+    else                       dest = const HelperLoginScreen();
+
+    Navigator.of(context).pushReplacement(PageRouteBuilder(
+      pageBuilder:        (_, a, __) => dest,
+      transitionDuration: const Duration(milliseconds: 500),
+      transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
+    ));
   }
 
   @override
   void dispose() {
-    _fadeCtrl.dispose();
     _logoCtrl.dispose();
     _contentCtrl.dispose();
-    _orbitCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-
     return Scaffold(
-      body: FadeTransition(
-        opacity: _bgFade,
-        child: Container(
-          width:  double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin:  Alignment.topLeft,
-              end:    Alignment.bottomRight,
-              colors: [
-                AppColors.gradientStart,
-                AppColors.gradientMid,
-                AppColors.gradientEnd,
-              ],
-              stops: [0.0, 0.5, 1.0],
-            ),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin:  Alignment.topLeft,
+            end:    Alignment.bottomRight,
+            colors: [
+              Color(0xFF3B0764), // deep violet
+              Color(0xFF5B21B6), // vivid purple
+              Color(0xFF7C3AED), // brand purple
+              Color(0xFF0891B2), // teal base
+            ],
+            stops: [0.0, 0.33, 0.66, 1.0],
           ),
-          child: Stack(
+        ),
+        child: SafeArea(
+          child: Column(
             children: [
-              // ── Rotating background orbs ──────────────────────
-              AnimatedBuilder(
-                animation: _orbit,
-                builder: (_, __) => _OrbitingParticles(
-                  size:     size,
-                  progress: _orbit.value,
-                ),
+              const Spacer(flex: 3),
+
+              // Logo
+              ScaleTransition(
+                scale:   _logoScale,
+                child:   FadeTransition(opacity: _logoFade, child: const _SplashLogo()),
               ),
 
-              // ── Scattered static icons ────────────────────────
-              ..._buildBgIcons(size),
+              const SizedBox(height: 32),
 
-              // ── Main content ──────────────────────────────────
-              SafeArea(
-                child: Column(
-                  children: [
-                    const Spacer(flex: 2),
-
-                    // Logo
-                    ScaleTransition(
-                      scale: _logoScale,
-                      child: FadeTransition(
-                        opacity: _logoFade,
-                        child:   _LogoBadge(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 36),
-
-                    // App name
-                    SlideTransition(
-                      position: _titleSlide,
-                      child: FadeTransition(
-                        opacity: _titleFade,
-                        child: const Text(
-                          'Sarthi Kendra',
-                          style: TextStyle(
-                            color:         Colors.white,
-                            fontSize:      38,
-                            fontWeight:    FontWeight.w800,
-                            letterSpacing: -0.5,
-                          ),
-                        ),
-                      ),
-                    ),
-
+              // Name + tagline + trust pills
+              SlideTransition(
+                position: _contentSlide,
+                child: FadeTransition(
+                  opacity: _contentFade,
+                  child: Column(children: [
+                    const Text('Sarthi Kendra',
+                        style: TextStyle(
+                            color: Colors.white, fontSize: 36,
+                            fontWeight: FontWeight.w800, letterSpacing: -0.5)),
                     const SizedBox(height: 10),
-
-                    // Tagline
-                    FadeTransition(
-                      opacity: _taglineFade,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 6),
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: AppColors.cyanAccent.withOpacity(0.4),
-                          ),
-                          borderRadius: BorderRadius.circular(20),
-                          color: AppColors.cyanAccent.withOpacity(0.08),
-                        ),
-                        child: const Text(
-                          'APNA SARTHI, APNA ROZGAR',
-                          style: TextStyle(
-                            color:         AppColors.cyanAccent,
-                            fontSize:      12,
-                            fontWeight:    FontWeight.w700,
-                            letterSpacing: 2.5,
-                          ),
-                        ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+                      decoration: BoxDecoration(
+                        color:        Colors.white.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(24),
+                        border:       Border.all(color: Colors.white.withOpacity(0.25)),
                       ),
+                      child: const Text('APNA SARTHI, APNA ROZGAR',
+                          style: TextStyle(color: Color(0xFF14FFEC),
+                              fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 2.5)),
                     ),
-
-                    const Spacer(flex: 3),
-
-                    // Bottom area
-                    FadeTransition(
-                      opacity: _taglineFade,
-                      child: Column(
-                        children: [
-                          // Minimal 3-dot pulse (no percentage, no timer)
-                          _PulsingDots(),
-                          const SizedBox(height: 20),
-                          Text(
-                            'PROFESSIONAL & AUTHORITATIVE',
-                            style: TextStyle(
-                              color:         Colors.white.withOpacity(0.25),
-                              fontSize:      9,
-                              fontWeight:    FontWeight.w600,
-                              letterSpacing: 2.5,
-                            ),
-                          ),
-                        ],
-                      ),
+                    const SizedBox(height: 24),
+                    // Trust signals
+                    Wrap(spacing: 10, runSpacing: 8, alignment: WrapAlignment.center,
+                      children: const [
+                        _TrustPill(icon: Icons.verified_rounded,   label: 'Govt. Verified'),
+                        _TrustPill(icon: Icons.lock_rounded,        label: 'Secure & Safe'),
+                        _TrustPill(icon: Icons.people_rounded,      label: '10K+ Helpers'),
+                      ],
                     ),
-
-                    const SizedBox(height: 40),
-                  ],
+                  ]),
                 ),
               ),
+
+              const Spacer(flex: 4),
+
+              FadeTransition(opacity: _contentFade, child: const _DotLoader()),
+              const SizedBox(height: 12),
+              FadeTransition(
+                opacity: _contentFade,
+                child: Text('Trouble Sarthi Platform · v1.0.0',
+                    style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 11)),
+              ),
+              const SizedBox(height: 32),
             ],
           ),
         ),
       ),
     );
   }
-
-  List<Widget> _buildBgIcons(Size size) {
-    final items = [
-      (Icons.electrical_services_rounded, 0.08, 0.10, 0.05),
-      (Icons.plumbing_rounded,            0.82, 0.07, 0.04),
-      (Icons.cleaning_services_rounded,   0.04, 0.38, 0.04),
-      (Icons.ac_unit_rounded,             0.88, 0.35, 0.04),
-      (Icons.build_circle_rounded,        0.78, 0.70, 0.05),
-      (Icons.star_rounded,                0.68, 0.16, 0.03),
-    ];
-    return items.map((e) {
-      final (icon, x, y, op) = e;
-      return Positioned(
-        left: size.width  * x,
-        top:  size.height * y,
-        child: Icon(icon, size: 28, color: Colors.white.withOpacity(op)),
-      );
-    }).toList();
-  }
 }
 
-// ── Orbiting particles ────────────────────────────────────────────────────────
-class _OrbitingParticles extends StatelessWidget {
-  final Size   size;
-  final double progress;
-  const _OrbitingParticles({required this.size, required this.progress});
-
-  @override
-  Widget build(BuildContext context) {
-    final cx = size.width  / 2;
-    final cy = size.height * 0.38;
-
-    return CustomPaint(
-      size: size,
-      painter: _OrbitPainter(cx: cx, cy: cy, progress: progress),
-    );
-  }
-}
-
-class _OrbitPainter extends CustomPainter {
-  final double cx, cy, progress;
-  const _OrbitPainter({
-    required this.cx,
-    required this.cy,
-    required this.progress,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..style = PaintingStyle.fill;
-
-    final orbits = [
-      (160.0, 5.0, AppColors.cyanAccent, 0.12),
-      (220.0, 4.0, Colors.white,          0.07),
-      (290.0, 6.0, AppColors.brandPurple, 0.10),
-    ];
-
-    for (var i = 0; i < orbits.length; i++) {
-      final (radius, dotSize, color, opacity) = orbits[i];
-      final angle = (progress + i / 3) * 2 * math.pi;
-      final x = cx + radius * math.cos(angle);
-      final y = cy + radius * math.sin(angle);
-      paint.color = color.withOpacity(opacity);
-      canvas.drawCircle(Offset(x, y), dotSize, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_OrbitPainter old) => old.progress != progress;
-}
-
-// ── Logo badge ────────────────────────────────────────────────────────────────
-class _LogoBadge extends StatelessWidget {
+class _SplashLogo extends StatelessWidget {
+  const _SplashLogo();
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width:  130,
-      height: 130,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Glow ring
-          Container(
-            width:  124,
-            height: 124,
+      width: 134, height: 134,
+      child: Stack(alignment: Alignment.center, children: [
+        // Glow ring
+        Container(
+          width: 130, height: 130,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.white.withOpacity(0.07),
+            border: Border.all(color: Colors.white.withOpacity(0.18)),
+          ),
+        ),
+        // White disc
+        Container(
+          width: 102, height: 102,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: const Color(0xFF7C3AED).withOpacity(0.55),
+                  blurRadius: 32, spreadRadius: 4),
+              BoxShadow(color: const Color(0xFF14FFEC).withOpacity(0.22),
+                  blurRadius: 20),
+            ],
+          ),
+          child: const Icon(Icons.handyman_rounded, size: 50, color: Color(0xFF4C1D95)),
+        ),
+        // Cyan badge
+        Positioned(
+          top: 4, right: 8,
+          child: Container(
+            width: 34, height: 34,
             decoration: BoxDecoration(
+              color: const Color(0xFF14FFEC),
               shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color:        AppColors.cyanAccent.withOpacity(0.25),
-                  blurRadius:   40,
-                  spreadRadius: 8,
-                ),
-              ],
+              boxShadow: [BoxShadow(
+                  color: const Color(0xFF14FFEC).withOpacity(0.55), blurRadius: 12)],
             ),
+            child: const Icon(Icons.navigation_rounded, size: 17, color: Color(0xFF0F2027)),
           ),
-          // White disc
-          Container(
-            width:  110,
-            height: 110,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.handyman_rounded,
-              size:  56,
-              color: AppColors.gradientStart,
-            ),
-          ),
-          // Cyan badge
-          Positioned(
-            top:   6,
-            right: 6,
-            child: Container(
-              width:  36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: AppColors.cyanAccent,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color:        AppColors.cyanAccent.withOpacity(0.5),
-                    blurRadius:   10,
-                    spreadRadius: 2,
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.navigation_rounded,
-                size:  18,
-                color: AppColors.gradientStart,
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 }
 
-// ── Pulsing dots loader (no progress %, no timer) ─────────────────────────────
-class _PulsingDots extends StatefulWidget {
-  @override
-  State<_PulsingDots> createState() => _PulsingDotsState();
-}
-
-class _PulsingDotsState extends State<_PulsingDots>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync:    this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
+class _TrustPill extends StatelessWidget {
+  final IconData icon; final String label;
+  const _TrustPill({required this.icon, required this.label});
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder:   (_, __) {
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(3, (i) {
-            // Each dot is offset in phase
-            final phase     = (i / 3);
-            final t         = (_ctrl.value - phase).abs() % 1.0;
-            final scale     = 0.6 + 0.4 * math.sin(t * math.pi);
-            final opacity   = 0.3 + 0.7 * math.sin(t * math.pi);
-            return Container(
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              width:  8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.cyanAccent.withOpacity(
-                  opacity.clamp(0.3, 1.0),
-                ),
-              ),
-              transform: Matrix4.identity()
-                ..scale(scale.clamp(0.6, 1.0)),
-            );
-          }),
-        );
-      },
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color:        Colors.white.withOpacity(0.11),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.22)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 13, color: const Color(0xFF14FFEC)),
+        const SizedBox(width: 5),
+        Text(label, style: const TextStyle(
+            color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500)),
+      ]),
     );
+  }
+}
+
+class _DotLoader extends StatefulWidget {
+  const _DotLoader();
+  @override
+  State<_DotLoader> createState() => _DotLoaderState();
+}
+class _DotLoaderState extends State<_DotLoader> with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+  @override
+  void initState() { super.initState(); _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat(); }
+  @override
+  void dispose() { _c.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(animation: _c, builder: (_, __) {
+      return Row(mainAxisSize: MainAxisSize.min, children: List.generate(3, (i) {
+        final t = ((_c.value * 3) - i).clamp(0.0, 1.0);
+        final op = (0.2 + 0.8 * (t < 0.5 ? t * 2 : (1 - t) * 2)).clamp(0.2, 1.0);
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          width: 7, height: 7,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: const Color(0xFF14FFEC).withOpacity(op),
+          ),
+        );
+      }));
+    });
   }
 }

@@ -1,32 +1,56 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ── Permissions ──────────────────────────────────────── -->
+    <!-- ── Network ─────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-    <!-- Camera + Storage (for KYC photo upload) -->
-    <uses-permission android:name="android.permission.CAMERA"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29"/>
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-
-    <!-- Location (for showing helper location on map) -->
+    <!-- ── Location (live map + helper tracking) ────────────── -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
 
-    <!-- Push Notifications (Firebase Cloud Messaging) -->
+    <!-- ── Camera + Storage (KYC photo upload) ──────────────── -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"/>
+
+    <!-- ── Push Notifications (FCM) ─────────────────────────── -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- ── Hardware features (optional, not required) ───────── -->
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false"/>
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false"/>
 
     <application
         android:label="Sarthi Kendra"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="false"
+        android:hardwareAccelerated="true"
+        android:requestLegacyExternalStorage="false">
 
+        <!-- ── Google Maps API Key ───────────────────────────── -->
+        <!-- Replace YOUR_GOOGLE_MAPS_API_KEY with your actual key -->
+        <!-- Get it from: console.cloud.google.com → Maps SDK for Android -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyAF7fsleQw4FmiBLZQ6JhlQ2lnuQQJnrjk"/>
+
+        <!-- ── Main Activity ─────────────────────────────────── -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -47,51 +71,65 @@
             </intent-filter>
         </activity>
 
-        <!-- Firebase Cloud Messaging Service -->
+        <!-- ── Firebase Cloud Messaging ──────────────────────── -->
         <service
             android:name="com.google.firebase.messaging.FirebaseMessagingService"
             android:exported="false">
-            <intent-filter>
+            <intent-filter android:priority="-500">
                 <action android:name="com.google.firebase.MESSAGING_EVENT"/>
             </intent-filter>
         </service>
 
-        <!-- FCM default notification channel -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="sarthi_kendra_channel"/>
 
-        <!-- FCM notification icon -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher"/>
 
-        <!-- FCM notification color -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_color"/>
 
-        <!-- Flutter embedding -->
+        <!-- ── Flutter embedding ──────────────────────────────── -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
 
     </application>
 
+    <!-- ── Intent queries (Android 11+ package visibility) ──── -->
     <queries>
+        <!-- Text processing -->
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <!-- For opening maps -->
+        <!-- Open in maps (geo: scheme for Google Maps / any map app) -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="geo"/>
         </intent>
-        <!-- For making phone calls -->
+        <!-- Open Google Maps directly -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"
+                android:host="maps.google.com"/>
+        </intent>
+        <!-- Phone calls -->
         <intent>
             <action android:name="android.intent.action.DIAL"/>
             <data android:scheme="tel"/>
+        </intent>
+        <!-- UPI payment intent (for future wallet feature) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="upi"/>
+        </intent>
+        <!-- Image picker / camera -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE"/>
         </intent>
     </queries>
 

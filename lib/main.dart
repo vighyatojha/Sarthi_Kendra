@@ -1,12 +1,14 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 
-import 'firebase_options.dart';          // ← ADD THIS
+import 'firebase_options.dart';
 import 'theme/app_theme.dart';
 import 'providers/theme_provider.dart';
 import 'providers/auth_provider.dart';
+import 'providers/language_provider.dart';            // ← NEW
 import 'screens/auth/helper_splash_screen.dart';
 
 void main() async {
@@ -24,7 +26,7 @@ void main() async {
   ]);
 
   await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,   // ← ADD THIS
+    options: DefaultFirebaseOptions.currentPlatform,
   );
 
   runApp(
@@ -32,6 +34,7 @@ void main() async {
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => LanguageProvider()),   // ← NEW
       ],
       child: const SarthiKendraApp(),
     ),

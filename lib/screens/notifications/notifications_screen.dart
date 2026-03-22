@@ -1,457 +1,305 @@
 // lib/screens/notifications/notifications_screen.dart
+// Uses Firebase Realtime Database for real-time delivery
 import 'package:flutter/material.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 
 import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
-import '../../utils/smooth_route.dart';
-import '../bookings/incoming_booking_detail.dart';
+import '../../providers/language_provider.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
-
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
+
   @override
   void initState() {
     super.initState();
     // Mark all as read when screen opens
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AuthProvider>().markAllNotificationsRead();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _markAllRead());
+  }
+
+  String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
+
+  DatabaseReference get _ref =>
+      FirebaseDatabase.instance.ref('notifications/$_uid');
+
+  Future<void> _markAllRead() async {
+    if (_uid.isEmpty) return;
+    try {
+      final snap = await _ref.get();
+      if (!snap.exists) return;
+      final data = Map<String, dynamic>.from(snap.value as Map);
+      final updates = <String, dynamic>{};
+      for (final key in data.keys) {
+        final item = Map<String, dynamic>.from(data[key] as Map);
+        if (item['read'] != true) {
+          updates['$key/read'] = true;
+        }
+      }
+      if (updates.isNotEmpty) await _ref.update(updates);
+      // Also update unread count in provider
+      if (mounted) context.read<AuthProvider>().markAllNotificationsRead();
+    } catch (e) { debugPrint('markAllRead: $e'); }
+  }
+
+  Future<void> _deleteNotification(String key) async {
+    try { await _ref.child(key).remove(); } catch (_) {}
+  }
+
+  Future<void> _clearAll() async {
+    final hi = context.read<LanguageProvider>().isHindi;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(hi ? 'सभी साफ़ करें?' : 'Clear all?'),
+        content: Text(hi
+            ? 'सभी नोटिफिकेशन हटा दी जाएंगी।'
+            : 'All notifications will be removed.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false),
+              child: Text(hi ? 'रद्द' : 'Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+              child: Text(hi ? 'हाँ, साफ़ करें' : 'Clear All')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      try { await _ref.remove(); } catch (_) {}
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final uid    = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final hi     = context.watch<LanguageProvider>().isHindi;
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
-      body: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(child: _buildHeader(context, isDark)),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-            sliver: SliverToBoxAdapter(
-              child: _NotificationList(uid: uid, isDark: isDark),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+      backgroundColor: isDark ? AppColors.bgDark : const Color(0xFFF2F3F8),
+      body: Column(children: [
+        _buildHeader(context, isDark, hi),
+        Expanded(child: _uid.isEmpty
+            ? _empty(isDark, hi)
+            : StreamBuilder<DatabaseEvent>(
+          stream: _ref.orderByChild('timestamp').onValue,
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator(
+                  color: AppColors.brandPurple));
+            }
+            if (!snap.hasData || snap.data!.snapshot.value == null) {
+              return _empty(isDark, hi);
+            }
 
-  Widget _buildHeader(BuildContext context, bool isDark) {
-    return Container(
-      padding: EdgeInsets.only(
-        top:    MediaQuery.of(context).padding.top + 12,
-        bottom: 16, left: 8, right: 16,
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : Colors.white,
-        border: Border(bottom: BorderSide(
-            color: isDark ? AppColors.borderDark : AppColors.borderLight)),
-      ),
-      child: Row(children: [
-        IconButton(
-          onPressed: () => Navigator.maybePop(context),
-          icon: Icon(Icons.arrow_back_ios_new_rounded,
-              color: isDark ? Colors.white : AppColors.textDarkLight, size: 20),
+            final raw  = Map<String, dynamic>.from(
+                snap.data!.snapshot.value as Map);
+            // Sort by timestamp descending
+            final entries = raw.entries.toList()
+              ..sort((a, b) {
+                final ta = (Map<String, dynamic>.from(a.value as Map)['timestamp'] ?? 0) as int;
+                final tb = (Map<String, dynamic>.from(b.value as Map)['timestamp'] ?? 0) as int;
+                return tb.compareTo(ta);
+              });
+
+            if (entries.isEmpty) return _empty(isDark, hi);
+
+            return ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+              itemCount: entries.length,
+              itemBuilder: (context, i) {
+                final key  = entries[i].key;
+                final data = Map<String, dynamic>.from(entries[i].value as Map);
+                return _NotifCard(
+                  notifKey: key, data: data,
+                  isDark:   isDark, hi: hi,
+                  onDelete: () => _deleteNotification(key),
+                );
+              },
+            );
+          },
         ),
-        Expanded(child: Text('Notifications', style: TextStyle(
-          color:      isDark ? Colors.white : AppColors.textDarkLight,
-          fontSize:   18, fontWeight: FontWeight.w700,
-        ))),
-        TextButton(
-          onPressed: () => context.read<AuthProvider>().markAllNotificationsRead(),
-          child: const Text('Mark all read',
-              style: TextStyle(color: AppColors.brandPurple, fontSize: 13)),
         ),
       ]),
     );
   }
-}
 
-class _NotificationList extends StatelessWidget {
-  final String uid;
-  final bool   isDark;
-  const _NotificationList({required this.uid, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    if (uid.isEmpty) return _emptyState();
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('notifications')
-          .doc(uid)
-          .collection('items')
-          .orderBy('createdAt', descending: true)
-          .limit(50)
-          .snapshots(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Padding(
-            padding: EdgeInsets.only(top: 80),
-            child: Center(child: CircularProgressIndicator(
-                color: AppColors.brandPurple)),
-          );
-        }
-        final docs = snap.data?.docs ?? [];
-        if (docs.isEmpty) return _emptyState();
-
-        // Group by day
-        final Map<String, List<QueryDocumentSnapshot>> grouped = {};
-        for (final doc in docs) {
-          final d  = doc.data() as Map<String, dynamic>;
-          final ts = (d['createdAt'] as Timestamp?)?.toDate();
-          final key = ts != null ? _dayKey(ts) : 'Earlier';
-          grouped.putIfAbsent(key, () => []).add(doc);
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: grouped.entries.map((entry) => Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 20, 4, 10),
-                child: Text(entry.key, style: TextStyle(
-                  color:    isDark ? AppColors.textSoftDark : AppColors.textSoftLight,
-                  fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2,
-                )),
-              ),
-              ...entry.value.map((doc) => _NotifCard(
-                doc: doc, isDark: isDark, uid: uid,
-              )),
-            ],
-          )).toList(),
-        );
-      },
+  Widget _buildHeader(BuildContext context, bool isDark, bool hi) {
+    return Container(
+      padding: EdgeInsets.only(
+        top: MediaQuery.of(context).padding.top + 12,
+        bottom: 16, left: 8, right: 8,
+      ),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft, end: Alignment.bottomRight,
+          colors: [Color(0xFF2E0754), Color(0xFF5B21B6), AppColors.brandPurple],
+        ),
+      ),
+      child: Row(children: [
+        IconButton(
+            onPressed: () => Navigator.maybePop(context),
+            icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: Colors.white, size: 20)),
+        Expanded(child: Text(hi ? 'नोटिफिकेशन' : 'Notifications',
+            style: const TextStyle(
+                color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700))),
+        IconButton(
+          onPressed: _clearAll,
+          icon: Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                  color:        Colors.white.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.delete_sweep_rounded,
+                  color: Colors.white, size: 18)),
+        ),
+      ]),
     );
   }
 
-  String _dayKey(DateTime dt) {
-    final now = DateTime.now();
-    if (_sameDay(dt, now)) return 'TODAY';
-    if (_sameDay(dt, now.subtract(const Duration(days: 1)))) return 'YESTERDAY';
-    return DateFormat('EEEE, d MMM').format(dt).toUpperCase();
-  }
-
-  bool _sameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
-
-  Widget _emptyState() => Padding(
-    padding: const EdgeInsets.only(top: 100),
-    child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+  Widget _empty(bool isDark, bool hi) {
+    return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
       Container(
-        width: 72, height: 72,
-        decoration: BoxDecoration(
-          color:  AppColors.brandPurple.withOpacity(0.1),
-          shape:  BoxShape.circle,
-        ),
-        child: const Icon(Icons.notifications_none_rounded,
-            size: 34, color: AppColors.brandPurple),
-      ),
+          width: 80, height: 80,
+          decoration: BoxDecoration(
+              color:  AppColors.brandPurple.withOpacity(0.1),
+              shape:  BoxShape.circle),
+          child: const Icon(Icons.notifications_none_rounded,
+              color: AppColors.brandPurple, size: 38)),
       const SizedBox(height: 16),
-      const Text('No notifications yet',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600,
-              color: AppColors.textMidDark)),
+      Text(hi ? 'कोई नोटिफिकेशन नहीं' : 'No notifications yet',
+          style: TextStyle(
+              color:      isDark ? Colors.white : AppColors.textDarkLight,
+              fontSize:   16, fontWeight: FontWeight.w600)),
       const SizedBox(height: 6),
-      const Text('New bookings & updates will appear here',
-          style: TextStyle(fontSize: 13, color: AppColors.textSoftDark)),
-    ])),
-  );
+      Text(hi ? 'नई बुकिंग पर यहाँ सूचना आएगी' : 'New booking alerts will appear here',
+          style: TextStyle(
+              color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
+              fontSize: 13)),
+    ]));
+  }
 }
 
 class _NotifCard extends StatelessWidget {
-  final QueryDocumentSnapshot doc;
-  final bool   isDark;
-  final String uid;
-  const _NotifCard({required this.doc, required this.isDark, required this.uid});
+  final String notifKey; final Map<String, dynamic> data;
+  final bool isDark, hi; final VoidCallback onDelete;
+  const _NotifCard({
+    required this.notifKey, required this.data,
+    required this.isDark, required this.hi, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
-    final d       = doc.data() as Map<String, dynamic>;
-    final type    = (d['type'] as String?) ?? 'system';
-    final title   = (d['title'] as String?) ?? '';
-    final body    = (d['body']  as String?) ?? '';
-    final isRead  = (d['read']  as bool?)   ?? false;
-    final ts      = (d['createdAt'] as Timestamp?)?.toDate();
-    final booking = d['bookingId'] as String?;
+    final type    = (data['type']    as String?) ?? 'general';
+    final title   = (data['title']   as String?) ?? '';
+    final body    = (data['body']    as String?) ?? '';
+    final read    = (data['read']    as bool?)   ?? false;
+    final ts      = (data['timestamp'] as int?);
+    final dt      = ts != null
+        ? DateTime.fromMillisecondsSinceEpoch(ts) : null;
 
-    final cfg = _cfgFor(type);
+    final (icon, color) = _typeInfo(type);
 
-    return GestureDetector(
-      onTap: () => _handleTap(context, type, booking, d),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin:  const EdgeInsets.only(bottom: 10),
+    return Dismissible(
+      key: ValueKey(notifKey),
+      direction:       DismissDirection.endToStart,
+      onDismissed:     (_) => onDelete(),
+      background: Container(
+          alignment: Alignment.centerRight,
+          padding:   const EdgeInsets.only(right: 20),
+          margin:    const EdgeInsets.only(bottom: 10),
+          decoration: BoxDecoration(
+              color:        AppColors.danger,
+              borderRadius: BorderRadius.circular(16)),
+          child: const Icon(Icons.delete_rounded, color: Colors.white, size: 22)),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color:        isRead
-              ? (isDark ? AppColors.cardDark : Colors.white)
-              : cfg.bgColor.withOpacity(isDark ? 0.12 : 0.06),
+          color: isDark
+              ? (read ? AppColors.cardDark : AppColors.cardDark.withOpacity(0.9))
+              : (read ? Colors.white : const Color(0xFFF5F0FF)),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isRead
-                ? (isDark ? AppColors.borderDark : AppColors.borderLight)
-                : cfg.color.withOpacity(0.25),
-          ),
+              color: read
+                  ? (isDark ? AppColors.borderDark : AppColors.borderLight)
+                  : AppColors.brandPurple.withOpacity(0.25)),
+          boxShadow: [BoxShadow(
+              color: isDark ? Colors.transparent : Colors.black.withOpacity(0.04),
+              blurRadius: 8, offset: const Offset(0, 2))],
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Icon
           Container(
-            width: 44, height: 44,
-            decoration: BoxDecoration(
-              color:        cfg.color.withOpacity(0.13),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(cfg.icon, color: cfg.color, size: 22),
-          ),
+              width: 44, height: 44,
+              decoration: BoxDecoration(
+                  color:        color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12)),
+              child: Icon(icon, color: color, size: 22)),
           const SizedBox(width: 12),
-          // Content
-          Expanded(child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              Expanded(child: Text(title, style: TextStyle(
-                color:      isDark ? Colors.white : AppColors.textDarkLight,
-                fontSize:   14, fontWeight: FontWeight.w700,
-              ))),
-              if (!isRead) Container(
-                width: 8, height: 8,
-                decoration: BoxDecoration(color: cfg.color, shape: BoxShape.circle),
-              ),
+              Expanded(child: Text(title.isNotEmpty ? title : _defaultTitle(type, hi),
+                  style: TextStyle(
+                      color:      isDark ? Colors.white : AppColors.textDarkLight,
+                      fontSize:   14, fontWeight: FontWeight.w700))),
+              if (!read)
+                Container(
+                    width: 8, height: 8,
+                    decoration: const BoxDecoration(
+                        color: AppColors.brandPurple, shape: BoxShape.circle)),
             ]),
-            const SizedBox(height: 4),
-            Text(body, style: TextStyle(
-              color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-              fontSize: 13, height: 1.4,
-            )),
-            const SizedBox(height: 6),
-            Text(ts != null ? _timeAgo(ts) : '',
-                style: TextStyle(
+            if (body.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(body, style: TextStyle(
+                  color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
+                  fontSize: 13, height: 1.4)),
+            ],
+            if (dt != null) ...[
+              const SizedBox(height: 6),
+              Text(_timeAgo(dt, hi), style: TextStyle(
                   color:    isDark ? AppColors.textSoftDark : AppColors.textSoftLight,
-                  fontSize: 11,
-                )),
+                  fontSize: 11)),
+            ],
           ])),
         ]),
       ),
     );
   }
 
-  void _handleTap(BuildContext context, String type, String? bookingId,
-      Map<String, dynamic> d) {
-    // Mark read
-    doc.reference.update({'read': true});
-
-    // Show popup with notification detail
-    showDialog(
-      context: context,
-      builder: (_) => _NotifDetailDialog(
-        type:      type,
-        title:     d['title'] ?? '',
-        body:      d['body']  ?? '',
-        bookingId: bookingId,
-        isDark:    isDark,
-        onAction: bookingId != null && type == 'new_booking'
-            ? () {
-          Navigator.pop(context);
-          Navigator.push(context,
-              SmoothRoute(page: IncomingBookingDetail(bookingId: bookingId)));
-        }
-            : null,
-      ),
-    );
-  }
-
-  _NotifCfg _cfgFor(String type) {
+  String _defaultTitle(String type, bool hi) {
     switch (type) {
-      case 'new_booking':
-        return _NotifCfg(Icons.work_rounded,         AppColors.brandPurple,
-            AppColors.brandPurple);
-      case 'booking_cancelled':
-        return _NotifCfg(Icons.cancel_rounded,       AppColors.danger,
-            AppColors.danger);
-      case 'payment_received':
-        return _NotifCfg(Icons.account_balance_wallet_rounded, AppColors.success,
-            AppColors.success);
-      case 'booking_completed':
-        return _NotifCfg(Icons.check_circle_rounded, AppColors.success,
-            AppColors.success);
-      case 'kyc_approved':
-        return _NotifCfg(Icons.verified_rounded,     AppColors.success,
-            AppColors.success);
-      case 'kyc_rejected':
-        return _NotifCfg(Icons.cancel_rounded,       AppColors.danger,
-            AppColors.danger);
-      default:
-        return _NotifCfg(Icons.notifications_rounded, AppColors.cyanAccent,
-            AppColors.cyanAccent);
+      case 'booking_new':      return hi ? 'नई बुकिंग' : 'New Booking';
+      case 'booking_accepted': return hi ? 'बुकिंग स्वीकृत' : 'Booking Accepted';
+      case 'payment':          return hi ? 'भुगतान प्राप्त' : 'Payment Received';
+      case 'kyc':              return hi ? 'KYC अपडेट' : 'KYC Update';
+      default:                 return hi ? 'सूचना' : 'Notification';
     }
   }
 
-  String _timeAgo(DateTime dt) {
+  (IconData, Color) _typeInfo(String type) {
+    switch (type) {
+      case 'booking_new':      return (Icons.work_rounded,            AppColors.brandPurple);
+      case 'booking_accepted': return (Icons.check_circle_rounded,    AppColors.success);
+      case 'payment':          return (Icons.wallet_rounded,          AppColors.warning);
+      case 'kyc':              return (Icons.verified_user_rounded,   AppColors.cyanAccent);
+      case 'alert':            return (Icons.warning_rounded,         AppColors.danger);
+      default:                 return (Icons.notifications_rounded,   AppColors.brandPurple);
+    }
+  }
+
+  String _timeAgo(DateTime dt, bool hi) {
     final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 1)  return 'Just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours   < 24) return '${diff.inHours}h ago';
-    if (diff.inDays    < 7)  return '${diff.inDays}d ago';
-    return DateFormat('d MMM, h:mm a').format(dt);
-  }
-}
-
-class _NotifCfg {
-  final IconData icon;
-  final Color    color, bgColor;
-  const _NotifCfg(this.icon, this.color, this.bgColor);
-}
-
-// ── Popup dialog (size adapts to content length) ──────────────────────────────
-class _NotifDetailDialog extends StatelessWidget {
-  final String    type, title, body;
-  final String?   bookingId;
-  final bool      isDark;
-  final VoidCallback? onAction;
-
-  const _NotifDetailDialog({
-    required this.type, required this.title, required this.body,
-    required this.isDark, this.bookingId, this.onAction,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _colorFor(type);
-    return Dialog(
-      backgroundColor: isDark ? AppColors.cardDark : Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: 56, height: 56,
-            decoration: BoxDecoration(
-              color:  color.withOpacity(0.12),
-              shape:  BoxShape.circle,
-            ),
-            child: Icon(_iconFor(type), color: color, size: 28),
-          ),
-          const SizedBox(height: 16),
-          Text(title, textAlign: TextAlign.center,
-              style: TextStyle(
-                color:      isDark ? Colors.white : AppColors.textDarkLight,
-                fontSize:   17, fontWeight: FontWeight.w700,
-              )),
-          const SizedBox(height: 10),
-          Text(body, textAlign: TextAlign.center,
-              style: TextStyle(
-                color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-                fontSize: 14, height: 1.55,
-              )),
-          const SizedBox(height: 24),
-          if (onAction != null) ...[
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: onAction,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: color,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
-                ),
-                child: const Text('View Booking',
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700)),
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () => Navigator.pop(context),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(
-                    color: isDark ? AppColors.borderDark : AppColors.borderLight),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-              child: Text('Close',
-                  style: TextStyle(
-                    color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-                    fontWeight: FontWeight.w600,
-                  )),
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-
-  Color _colorFor(String t) {
-    switch (t) {
-      case 'new_booking':       return AppColors.brandPurple;
-      case 'booking_cancelled': return AppColors.danger;
-      case 'payment_received':  return AppColors.success;
-      case 'kyc_approved':      return AppColors.success;
-      case 'kyc_rejected':      return AppColors.danger;
-      default:                  return AppColors.cyanAccent;
-    }
-  }
-
-  IconData _iconFor(String t) {
-    switch (t) {
-      case 'new_booking':       return Icons.work_rounded;
-      case 'booking_cancelled': return Icons.cancel_rounded;
-      case 'payment_received':  return Icons.account_balance_wallet_rounded;
-      case 'kyc_approved':      return Icons.verified_rounded;
-      case 'kyc_rejected':      return Icons.cancel_rounded;
-      default:                  return Icons.notifications_rounded;
-    }
-  }
-}
-
-// ── Bell icon widget with dot (use this in dashboard header) ──────────────────
-class NotificationBell extends StatelessWidget {
-  final bool isDark;
-  const NotificationBell({super.key, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final count = context.watch<AuthProvider>().unreadCount;
-    return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        SmoothRoute(page: const NotificationsScreen()),
-      ),
-      child: Stack(children: [
-        Icon(
-          count > 0 ? Icons.notifications_rounded : Icons.notifications_outlined,
-          color: Colors.white, size: 26,
-        ),
-        if (count > 0) Positioned(
-          right: 0, top: 0,
-          child: Container(
-            width: 10, height: 10,
-            decoration: BoxDecoration(
-              color: AppColors.danger,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.gradientStart, width: 1.5,
-              ),
-            ),
-          ),
-        ),
-      ]),
-    );
+    if (diff.inSeconds < 60)  return hi ? 'अभी' : 'Just now';
+    if (diff.inMinutes < 60)  return hi ? '${diff.inMinutes} मिनट पहले' : '${diff.inMinutes}m ago';
+    if (diff.inHours   < 24)  return hi ? '${diff.inHours} घंटे पहले'   : '${diff.inHours}h ago';
+    if (diff.inDays    < 7)   return hi ? '${diff.inDays} दिन पहले'     : '${diff.inDays}d ago';
+    return DateFormat('d MMM').format(dt);
   }
 }
