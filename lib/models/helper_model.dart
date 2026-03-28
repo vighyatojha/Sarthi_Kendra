@@ -1,5 +1,6 @@
 // lib/models/helper_model.dart
 // Complete model — all fields, getters, copyWith, fromMap, toMap
+
 class HelperModel {
   final String       uid;
   final String       name;
@@ -24,6 +25,10 @@ class HelperModel {
   final bool         notifEnabled;
   final String?      kycRejectedReason;
 
+  // ✅ NEW FIELDS (FIX)
+  final String kycStatus;
+  final Map<String, dynamic>? kycDocuments;
+
   const HelperModel({
     required this.uid,
     required this.name,
@@ -47,9 +52,13 @@ class HelperModel {
     this.fcmToken,
     this.notifEnabled    = true,
     this.kycRejectedReason,
+
+    // ✅ NEW (FIX)
+    this.kycStatus = 'not_submitted',
+    this.kycDocuments,
   });
 
-  // ── Computed getters ─────────────────────────────────────────────────────
+  // ── Computed getters ─────────────────────────────────────────
   String get displayId {
     final part = uid.length >= 6 ? uid.substring(0, 6).toUpperCase() : uid.toUpperCase();
     return 'SK-$part';
@@ -62,15 +71,21 @@ class HelperModel {
     return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
   }
 
-  bool get isPending   => status == 'pending';
-  bool get isSubmitted => status == 'submitted';
-  bool get isApproved  => status == 'approved';
-  bool get isRejected  => status == 'rejected';
-  bool get isInactive  => status == 'inactive';
+  bool get isApproved  => status == 'approved' || kycStatus == 'approved';
+  bool get isRejected  => (status == 'rejected' || kycStatus == 'rejected') && !isApproved;
+  bool get isInactive  => status == 'inactive' && !isApproved;
+
+// isPending: registered but hasn't submitted KYC docs yet
+  bool get isPending   => !isApproved && !isRejected && !isInactive
+      && kycStatus == 'not_submitted' && !kycSkipped;
+
+// isSubmitted: KYC docs uploaded, waiting for admin review
+  bool get isSubmitted => !isApproved && !isRejected && !isInactive
+      && kycStatus == 'pending';
 
   bool get kycRequired => !kycDone && !kycSkipped;
 
-  // ── copyWith ─────────────────────────────────────────────────────────────
+  // ── copyWith ─────────────────────────────────────────────────
   HelperModel copyWith({
     String?       uid,
     String?       name,
@@ -94,6 +109,10 @@ class HelperModel {
     String?       fcmToken,
     bool?         notifEnabled,
     String?       kycRejectedReason,
+
+    // ✅ NEW (FIX)
+    String? kycStatus,
+    Map<String, dynamic>? kycDocuments,
   }) {
     return HelperModel(
       uid:               uid             ?? this.uid,
@@ -118,10 +137,14 @@ class HelperModel {
       fcmToken:          fcmToken        ?? this.fcmToken,
       notifEnabled:      notifEnabled    ?? this.notifEnabled,
       kycRejectedReason: kycRejectedReason ?? this.kycRejectedReason,
+
+      // ✅ NEW (FIX)
+      kycStatus: kycStatus ?? this.kycStatus,
+      kycDocuments: kycDocuments ?? this.kycDocuments,
     );
   }
 
-  // ── fromMap ──────────────────────────────────────────────────────────────
+  // ── fromMap ──────────────────────────────────────────────────
   factory HelperModel.fromMap(Map<String, dynamic> map, String uid) {
     return HelperModel(
       uid:               uid,
@@ -146,10 +169,14 @@ class HelperModel {
       fcmToken:          map['fcmToken']           as String?,
       notifEnabled:      (map['notifEnabled']      as bool?) ?? true,
       kycRejectedReason: map['kycRejectedReason']  as String?,
+
+      // ✅ NEW (FIX)
+      kycStatus: (map['kycStatus'] as String?) ?? 'not_submitted',
+      kycDocuments: map['kycDocuments'] as Map<String, dynamic>?,
     );
   }
 
-  // ── toMap ────────────────────────────────────────────────────────────────
+  // ── toMap ────────────────────────────────────────────────────
   Map<String, dynamic> toMap() => {
     'uid':               uid,
     'name':              name,
@@ -173,5 +200,9 @@ class HelperModel {
     if (fcmToken != null) 'fcmToken': fcmToken,
     'notifEnabled':      notifEnabled,
     if (kycRejectedReason != null) 'kycRejectedReason': kycRejectedReason,
+
+    // ✅ NEW (FIX)
+    'kycStatus': kycStatus,
+    if (kycDocuments != null) 'kycDocuments': kycDocuments,
   };
 }

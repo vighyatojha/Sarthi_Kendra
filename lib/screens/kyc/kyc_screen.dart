@@ -1,4 +1,10 @@
-// lib/screens/kyc/kyc_screen.dart
+// lib/screens/kyc/kyc_screen.dart  ← FIXED VERSION
+// CHANGES FROM ORIGINAL (marked ← FIX):
+//   1. kycData map now uses 'aadharNumber'/'panNumber' keys
+//      (admin also accepts 'aadhaar'/'pan' due to || fallback, but explicit is safer)
+//
+// Note: The real root-cause bugs are ALL in auth_provider.dart → submitKyc().
+// This file is mostly correct; the key change is being explicit about field names.
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -17,7 +23,6 @@ class _KycScreenState extends State<KycScreen> {
   bool _isSubmitting = false;
   bool _isSkipping   = false;
 
-  // KYC field values (in a real app, use file pickers for uploads)
   final _aadhaarCtrl = TextEditingController();
   final _panCtrl     = TextEditingController();
   final _formKey     = GlobalKey<FormState>();
@@ -36,8 +41,13 @@ class _KycScreenState extends State<KycScreen> {
 
     final auth = context.read<AuthProvider>();
     final success = await auth.submitKyc({
-      'aadhaar': _aadhaarCtrl.text.trim(),
-      'pan':     _panCtrl.text.trim(),
+      // ← FIX: Use 'aadharNumber' to match admin's primary key.
+      //   Admin reads: docs.aadharNumber || docs.aadhaar
+      //   Using 'aadharNumber' ensures the primary slot is filled.
+      'aadharNumber': _aadhaarCtrl.text.trim(),
+      'aadhaar':      _aadhaarCtrl.text.trim(), // keep fallback key too
+      'panNumber':    _panCtrl.text.trim(),
+      'pan':          _panCtrl.text.trim(),     // keep fallback key too
     });
 
     if (!mounted) return;
@@ -81,10 +91,7 @@ class _KycScreenState extends State<KycScreen> {
       backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
       body: Column(
         children: [
-          // ── Header ──────────────────────────────────────────────
           _buildHeader(isDark),
-
-          // ── Body ────────────────────────────────────────────────
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
@@ -93,23 +100,14 @@ class _KycScreenState extends State<KycScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // ── Skip banner ───────────────────────────────
                     _buildSkipBanner(isDark),
                     const SizedBox(height: 20),
-
-                    // ── Info box ──────────────────────────────────
                     _buildInfoBox(isDark),
                     const SizedBox(height: 20),
-
-                    // ── KYC form ──────────────────────────────────
                     _buildKycCard(isDark),
                     const SizedBox(height: 24),
-
-                    // ── Submit button ─────────────────────────────
                     _buildSubmitButton(),
                     const SizedBox(height: 16),
-
-                    // ── Skip button ───────────────────────────────
                     _buildSkipButton(isDark),
                     const SizedBox(height: 32),
                   ],
@@ -163,7 +161,6 @@ class _KycScreenState extends State<KycScreen> {
                   ),
                 ),
               ),
-              // ── Skip text button in header ──────────────────
               TextButton(
                 onPressed: _isSkipping ? null : _skipKyc,
                 style: TextButton.styleFrom(
@@ -320,7 +317,6 @@ class _KycScreenState extends State<KycScreen> {
           ),
           const SizedBox(height: 20),
 
-          // Aadhaar
           _buildFieldLabel(
             icon:   Icons.credit_card_outlined,
             label:  'Aadhaar Card Number',
@@ -349,7 +345,6 @@ class _KycScreenState extends State<KycScreen> {
 
           const SizedBox(height: 16),
 
-          // PAN
           _buildFieldLabel(
             icon:   Icons.assignment_ind_outlined,
             label:  'PAN Card Number',

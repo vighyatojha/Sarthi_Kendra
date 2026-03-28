@@ -1,28 +1,20 @@
 // lib/screens/dashboard/helper_dashboard.dart
 // ═══════════════════════════════════════════════════════════════════════════
-//  SARTHI KENDRA — Complete Dashboard Redesign
-//  Reference: Images 1-3 (Kinetic Editorial style, light theme)
+//  SARTHI KENDRA — Dashboard (light theme only, no duplicate screens)
 //
-//  Architecture:
-//    Tab 0 — JOBS  (primary, badge count)
-//    Tab 1 — HOME  (summary dashboard)
-//    Tab 2 — EARN  (day/week/month toggle + bar chart)
-//    Tab 3 — ME    (profile, UPI, language, support)
+//  Tab layout:
+//    0 — JOBS   (new, redesigned inline)
+//    1 — HOME   (new, redesigned inline)
+//    2 — EARN   → existing EarningsScreen
+//    3 — ME     → existing HelperProfileScreen
 //
-//  Features:
-//    • Image-1 style greeting header (welcome pill + emoji + location pill)
-//    • Image-2/3 style Jobs tab (status banner, live timer, quick replies,
-//      dominant ACCEPT / ghost DECLINE, distance, service icons)
-//    • Background GPS → Firestore (no visible map on home)
-//    • Full Firestore backend: accept · decline · quick-reply · mark-complete
-//    • Earnings tab: day/week/month + bar chart + withdrawal button
-//    • Me tab: UPI details, language toggle, support, logout
-//    • KYC gates unchanged
+//  Removed from this file:
+//    _EarnTab, _MeTab and all their sub-widgets (duplicated existing files)
+//    All isDark / dark-theme branches
 //
-//  pubspec.yaml additions:
+//  pubspec.yaml additions needed:
 //    url_launcher: ^6.2.5
-//    fl_chart: ^0.68.0        ← for earnings bar chart
-//    (google_maps_flutter + geolocator already present)
+//    geolocator: ^12.0.0   (already present)
 // ═══════════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
@@ -42,42 +34,31 @@ import '../../utils/smooth_route.dart';
 import '../kyc/kyc_screen.dart';
 import '../bookings/incoming_booking_detail.dart';
 import '../jobs/job_history_screen.dart';
-import '../jobs/ongoing_job_screen.dart';
 import '../support/support_screen.dart';
+import '../earning/earnings_screen.dart';
+import '../profile/helper_profile_screen.dart';
 import '../../widgets/notification_bell.dart';
 
-// ───────────────────────────────────────────────────────────────────────────
-// Design tokens (light-first palette matching reference images)
-// ───────────────────────────────────────────────────────────────────────────
-class _C {
-  // backgrounds
-  static const bg       = Color(0xFFF4F3FF);   // very pale lavender
-  static const white    = Colors.white;
-
-  // brand
-  static const purple   = Color(0xFF7C3AED);
-  static const indigo   = Color(0xFF2D1B69);
-  static const violet   = Color(0xFF5B21B6);
-
-  // semantic
-  static const green    = Color(0xFF16A34A);
-  static const amber    = Color(0xFFF59E0B);
-  static const red      = Color(0xFFEF4444);
-  static const cyan     = Color(0xFF06B6D4);
-
-  // text
-  static const t1       = Color(0xFF1E1B4B);   // primary
-  static const t2       = Color(0xFF64748B);   // secondary
-  static const t3       = Color(0xFF94A3B8);   // muted
-
-  // borders / dividers
-  static const border   = Color(0xFFEDE9FE);
-  static const divider  = Color(0xFFF1F0FF);
+// ─── Light-only palette ──────────────────────────────────────────────────────
+class _P {
+  static const bg     = Color(0xFFF8F7FF);
+  static const white  = Colors.white;
+  static const purple = Color(0xFF7C3AED);
+  static const indigo = Color(0xFF2D1B69);
+  static const violet = Color(0xFF5B21B6);
+  static const green  = Color(0xFF16A34A);
+  static const amber  = Color(0xFFF59E0B);
+  static const red    = Color(0xFFEF4444);
+  static const t1     = Color(0xFF1E1B4B);
+  static const t2     = Color(0xFF64748B);
+  static const t3     = Color(0xFF94A3B8);
+  static const border = Color(0xFFEDE9FE);
+  static const div    = Color(0xFFF1F0FF);
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// Root scaffold
-// ───────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// ROOT SCAFFOLD
+// ═══════════════════════════════════════════════════════════════════════════
 class HelperDashboard extends StatefulWidget {
   const HelperDashboard({super.key});
   @override
@@ -87,27 +68,23 @@ class HelperDashboard extends StatefulWidget {
 class _HelperDashboardState extends State<HelperDashboard>
     with SingleTickerProviderStateMixin {
 
-  // ── tabs ─────────────────────────────────────────────────────────
   int _tab = 0;
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
 
-  // ── location (background, silent) ────────────────────────────────
+  // Background GPS
   StreamSubscription<Position>? _locSub;
   Position? _myPos;
 
-  // ── Jobs-tab badge counter ────────────────────────────────────────
+  // Badge counter for JOBS tab
   StreamSubscription<QuerySnapshot>? _badgeSub;
   int _pendingCount = 0;
-
-  // ── Firestore ref ─────────────────────────────────────────────────
-  final _db = FirebaseFirestore.instance;
 
   @override
   void initState() {
     super.initState();
     _fadeCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 180));
+        vsync: this, duration: const Duration(milliseconds: 200));
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -125,7 +102,6 @@ class _HelperDashboardState extends State<HelperDashboard>
     super.dispose();
   }
 
-  // ── background GPS ────────────────────────────────────────────────
   Future<void> _initLocation() async {
     if (!await Geolocator.isLocationServiceEnabled()) return;
     var p = await Geolocator.checkPermission();
@@ -146,15 +122,15 @@ class _HelperDashboardState extends State<HelperDashboard>
     if (mounted) setState(() => _myPos = pos);
     final uid = context.read<AuthProvider>().helper?.uid ?? '';
     if (uid.isEmpty) return;
-    _db.collection('helpers').doc(uid).update({
+    FirebaseFirestore.instance.collection('helpers').doc(uid).update({
       'location': GeoPoint(pos.latitude, pos.longitude),
       'locationUpdatedAt': FieldValue.serverTimestamp(),
     }).catchError((_) {});
   }
 
-  // ── badge counter ─────────────────────────────────────────────────
   void _initBadge() {
-    _badgeSub = _db.collection('bookings')
+    _badgeSub = FirebaseFirestore.instance
+        .collection('bookings')
         .where('status', isEqualTo: 'pending')
         .snapshots()
         .listen((s) {
@@ -162,7 +138,6 @@ class _HelperDashboardState extends State<HelperDashboard>
     });
   }
 
-  // ── tab switch ────────────────────────────────────────────────────
   void _switchTab(int i) {
     if (_tab == i) return;
     HapticFeedback.selectionClick();
@@ -174,7 +149,6 @@ class _HelperDashboardState extends State<HelperDashboard>
   @override
   Widget build(BuildContext context) {
     final helper = context.watch<AuthProvider>().helper;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     // KYC gates
     if (helper != null) {
@@ -184,25 +158,24 @@ class _HelperDashboardState extends State<HelperDashboard>
       if (helper.isInactive)  return _KycInactive(helper: helper);
     }
 
-    final pages = [
-      _JobsTab(myPos: _myPos, pendingCount: _pendingCount, onHomeTab: () => _switchTab(1)),
-      _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0)),
-      const _EarnTab(),
-      const _MeTab(),
-    ];
-
     final lang = context.watch<LanguageProvider>();
 
+    final pages = [
+      _JobsTab(myPos: _myPos, pendingCount: _pendingCount, onGoHome: () => _switchTab(1)),
+      _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0)),
+      const EarningsScreen(),
+      const HelperProfileScreen(),
+    ];
+
     return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : _C.bg,
+      backgroundColor: _P.bg,
       body: FadeTransition(
         opacity: _fadeAnim,
         child: IndexedStack(index: _tab, children: pages),
       ),
-      bottomNavigationBar: _NavBar(
+      bottomNavigationBar: _BottomNav(
         selected: _tab,
         onSelect: _switchTab,
-        isDark: isDark,
         lang: lang,
         badge: _pendingCount,
       ),
@@ -211,17 +184,16 @@ class _HelperDashboardState extends State<HelperDashboard>
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BOTTOM NAV  (4 tabs, red badge on JOBS)
+// BOTTOM NAV
 // ═══════════════════════════════════════════════════════════════════════════
-class _NavBar extends StatelessWidget {
+class _BottomNav extends StatelessWidget {
   final int selected;
   final void Function(int) onSelect;
-  final bool isDark;
   final LanguageProvider lang;
   final int badge;
-  const _NavBar({
+  const _BottomNav({
     required this.selected, required this.onSelect,
-    required this.isDark, required this.lang, required this.badge,
+    required this.lang, required this.badge,
   });
 
   @override
@@ -236,17 +208,11 @@ class _NavBar extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
-        border: Border(
-          top: BorderSide(
-              color: isDark ? AppColors.borderDark : const Color(0xFFECEBFF),
-              width: 1),
-        ),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(isDark ? 0.22 : 0.07),
-              blurRadius: 20, offset: const Offset(0, -4)),
-        ],
+        color: _P.white,
+        border: Border(top: BorderSide(color: const Color(0xFFECEBFF), width: 1)),
+        boxShadow: [BoxShadow(
+            color: Colors.black.withOpacity(0.07),
+            blurRadius: 20, offset: const Offset(0, -4))],
       ),
       child: SafeArea(
         top: false,
@@ -266,16 +232,13 @@ class _NavBar extends StatelessWidget {
                   duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   decoration: BoxDecoration(
-                    color: sel ? _C.purple.withOpacity(0.10) : Colors.transparent,
+                    color: sel ? _P.purple.withOpacity(0.10) : Colors.transparent,
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
                     Stack(clipBehavior: Clip.none, children: [
-                      Icon(
-                        sel ? fill : out, size: 24,
-                        color: sel ? _C.purple
-                            : (isDark ? AppColors.textSoftDark : _C.t3),
-                      ),
+                      Icon(sel ? fill : out, size: 24,
+                          color: sel ? _P.purple : _P.t3),
                       if (hasBadge)
                         Positioned(
                           top: -5, right: -8,
@@ -284,16 +247,13 @@ class _NavBar extends StatelessWidget {
                             height: 17,
                             padding: const EdgeInsets.symmetric(horizontal: 4),
                             decoration: BoxDecoration(
-                                color: _C.red,
+                                color: _P.red,
                                 borderRadius: BorderRadius.circular(9),
-                                border: Border.all(
-                                    color: isDark ? AppColors.cardDark : _C.white,
-                                    width: 1.5)),
+                                border: Border.all(color: _P.white, width: 1.5)),
                             child: Center(child: Text(
                               badge > 9 ? '9+' : '$badge',
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 9,
-                                  fontWeight: FontWeight.w800),
+                              style: const TextStyle(color: Colors.white,
+                                  fontSize: 9, fontWeight: FontWeight.w800),
                             )),
                           ),
                         ),
@@ -302,8 +262,7 @@ class _NavBar extends StatelessWidget {
                     Text(lbl, style: TextStyle(
                       fontSize: 9,
                       fontWeight: sel ? FontWeight.w800 : FontWeight.w500,
-                      color: sel ? _C.purple
-                          : (isDark ? AppColors.textSoftDark : _C.t3),
+                      color: sel ? _P.purple : _P.t3,
                       letterSpacing: 0.4,
                     )),
                   ]),
@@ -323,47 +282,40 @@ class _NavBar extends StatelessWidget {
 class _JobsTab extends StatelessWidget {
   final Position? myPos;
   final int pendingCount;
-  final VoidCallback? onHomeTab;
-  const _JobsTab({this.myPos, required this.pendingCount, this.onHomeTab});
+  final VoidCallback? onGoHome;
+  const _JobsTab({this.myPos, required this.pendingCount, this.onGoHome});
 
   @override
   Widget build(BuildContext context) {
     final helper  = context.watch<AuthProvider>().helper;
-    final isDark  = Theme.of(context).brightness == Brightness.dark;
     final isHindi = context.watch<LanguageProvider>().isHindi;
     final uid     = helper?.uid ?? '';
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : _C.bg,
+      backgroundColor: _P.bg,
       body: CustomScrollView(slivers: [
-        // ── compact purple header (image-2 style) ──────────────
-        SliverToBoxAdapter(child: _CompactHeader(
-            helper: helper, isDark: isDark, isHindi: isHindi)),
-        // ── status banner ──────────────────────────────────────
+        SliverToBoxAdapter(child: _TabHeader(
+          helper: helper,
+          isOnline: helper?.isOnline ?? false,
+          isHindi: isHindi,
+        )),
         SliverToBoxAdapter(child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
           child: _StatusBanner(
-              helper: helper, count: pendingCount,
-              isDark: isDark, isHindi: isHindi),
+              helper: helper, count: pendingCount, isHindi: isHindi),
         )),
-        // ── body ───────────────────────────────────────────────
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 18, 16, 110),
           sliver: SliverList(delegate: SliverChildListDelegate([
-            // Ongoing job
-            _OngoingJobSection(uid: uid, isDark: isDark, isHindi: isHindi),
-            // Section header
+            _OngoingJobSection(uid: uid, isHindi: isHindi),
             _SecHead(
               title: isHindi ? 'नए अनुरोध' : 'Pending Requests',
-              badge: pendingCount > 0 ? '${pendingCount} Nearby' : null,
-              isDark: isDark,
+              badge: pendingCount > 0 ? '$pendingCount Nearby' : null,
             ),
             const SizedBox(height: 12),
-            // Request list
-            _PendingList(uid: uid, isDark: isDark, isHindi: isHindi, myPos: myPos),
+            _PendingList(uid: uid, isHindi: isHindi, myPos: myPos),
             const SizedBox(height: 22),
-            // Job history
-            _HistoryBtn(isDark: isDark, isHindi: isHindi),
+            _HistoryBtn(isHindi: isHindi),
             const SizedBox(height: 12),
           ])),
         ),
@@ -372,80 +324,71 @@ class _JobsTab extends StatelessWidget {
   }
 }
 
-// ── compact header (image-2: avatar + name + ONLINE chip) ────────
-class _CompactHeader extends StatelessWidget {
+// ── Shared tab header (reference image style) ─────────────────────────────
+class _TabHeader extends StatelessWidget {
   final HelperModel? helper;
-  final bool isDark, isHindi;
-  const _CompactHeader(
-      {required this.helper, required this.isDark, required this.isHindi});
+  final bool isOnline, isHindi;
+  const _TabHeader(
+      {required this.helper, required this.isOnline, required this.isHindi});
 
   @override
-  Widget build(BuildContext context) {
-    final isOnline = helper?.isOnline ?? false;
-    return Container(
-      padding: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top + 12,
-        bottom: 14, left: 16, right: 16,
+  Widget build(BuildContext context) => Container(
+    padding: EdgeInsets.only(
+      top: MediaQuery.of(context).padding.top + 12,
+      bottom: 14, left: 16, right: 16,
+    ),
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft, end: Alignment.bottomRight,
+        colors: [_P.indigo, _P.violet, _P.purple],
       ),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: [_C.indigo, _C.violet, _C.purple],
-        ),
-      ),
-      child: Row(children: [
-        // avatar
-        Container(
-          width: 42, height: 42,
-          decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.15),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white.withOpacity(0.32), width: 2)),
-          child: Center(child: Text(helper?.initials ?? 'SK',
-              style: const TextStyle(color: Colors.white,
-                  fontSize: 14, fontWeight: FontWeight.w800))),
-        ),
-        const SizedBox(width: 11),
-        // name
-        Expanded(child: Text(helper?.name ?? 'Helper',
+    ),
+    child: Row(children: [
+      Container(
+        width: 42, height: 42,
+        decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.15),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.3), width: 2)),
+        child: Center(child: Text(helper?.initials ?? 'SK',
             style: const TextStyle(color: Colors.white,
-                fontSize: 16, fontWeight: FontWeight.w700))),
-        // ONLINE chip
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.18),
-              borderRadius: BorderRadius.circular(20)),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Container(width: 7, height: 7, decoration: BoxDecoration(
-                color: isOnline ? AppColors.onlineGreen : Colors.white38,
-                shape: BoxShape.circle)),
-            const SizedBox(width: 5),
-            Text(
-              isOnline
-                  ? (isHindi ? 'ऑनलाइन' : 'ONLINE')
-                  : (isHindi ? 'ऑफलाइन' : 'OFFLINE'),
+                fontSize: 14, fontWeight: FontWeight.w800))),
+      ),
+      const SizedBox(width: 11),
+      Expanded(child: Text(helper?.name ?? 'Helper',
+          style: const TextStyle(
+              color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700))),
+      // Online chip
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.18),
+            borderRadius: BorderRadius.circular(20)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(width: 7, height: 7, decoration: BoxDecoration(
+              color: isOnline ? AppColors.onlineGreen : Colors.white38,
+              shape: BoxShape.circle)),
+          const SizedBox(width: 5),
+          Text(isOnline
+              ? (isHindi ? 'ऑनलाइन' : 'ONLINE')
+              : (isHindi ? 'ऑफलाइन' : 'OFFLINE'),
               style: const TextStyle(color: Colors.white,
-                  fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-            ),
-          ]),
-        ),
-        const SizedBox(width: 10),
-        const NotificationBell(isDark: false),
-      ]),
-    );
-  }
+                  fontSize: 10, fontWeight: FontWeight.w700)),
+        ]),
+      ),
+      const SizedBox(width: 10),
+      const NotificationBell(isDark: false),
+    ]),
+  );
 }
 
-// ── status banner (image-2: wifi icon + text + ACTIVE pill) ──────
+// ── Status banner ─────────────────────────────────────────────────────────
 class _StatusBanner extends StatelessWidget {
   final HelperModel? helper;
   final int count;
-  final bool isDark, isHindi;
-  const _StatusBanner({
-    required this.helper, required this.count,
-    required this.isDark, required this.isHindi,
-  });
+  final bool isHindi;
+  const _StatusBanner(
+      {required this.helper, required this.count, required this.isHindi});
 
   @override
   Widget build(BuildContext context) {
@@ -453,25 +396,24 @@ class _StatusBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
+        color: _P.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
             color: isOnline
                 ? AppColors.onlineGreen.withOpacity(0.25)
-                : (isDark ? AppColors.borderDark : _C.border)),
+                : _P.border),
         boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.1 : 0.04),
+            color: Colors.black.withOpacity(0.04),
             blurRadius: 10, offset: const Offset(0, 2))],
       ),
       child: Row(children: [
-        // wifi icon
         Container(
           width: 40, height: 40,
           decoration: BoxDecoration(
-              color: (isOnline ? AppColors.onlineGreen : _C.t3).withOpacity(0.10),
+              color: (isOnline ? AppColors.onlineGreen : _P.t3).withOpacity(0.10),
               borderRadius: BorderRadius.circular(12)),
           child: Icon(Icons.wifi_tethering_rounded,
-              color: isOnline ? AppColors.onlineGreen : _C.t3, size: 20),
+              color: isOnline ? AppColors.onlineGreen : _P.t3, size: 20),
         ),
         const SizedBox(width: 12),
         Expanded(child: Column(
@@ -479,48 +421,24 @@ class _StatusBanner extends StatelessWidget {
           Text(isOnline
               ? (isHindi ? 'आप ऑनलाइन हैं' : "You're Online")
               : (isHindi ? 'आप ऑफलाइन हैं' : "You're Offline"),
-              style: TextStyle(
-                  color: isDark ? Colors.white : _C.t1,
-                  fontSize: 14, fontWeight: FontWeight.w700)),
+              style: const TextStyle(
+                  color: _P.t1, fontSize: 14, fontWeight: FontWeight.w700)),
           Text(count > 0
               ? '$count ${isHindi ? 'अनुरोध पास में' : 'Request${count > 1 ? "s" : ""} nearby'}'
               : (isHindi ? 'पास में कोई अनुरोध नहीं' : 'No requests nearby'),
-              style: TextStyle(
-                  color: isDark ? AppColors.textMidDark : _C.t2,
-                  fontSize: 11)),
+              style: const TextStyle(color: _P.t2, fontSize: 11)),
         ])),
-        // Toggle pill
-        GestureDetector(
-          onTap: () {
-            HapticFeedback.mediumImpact();
-            context.read<AuthProvider>().toggleOnlineStatus();
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-                color: isOnline ? AppColors.onlineGreen : _C.purple,
-                borderRadius: BorderRadius.circular(22)),
-            child: Text(
-              isOnline
-                  ? (isHindi ? 'ऑनलाइन' : 'ACTIVE')
-                  : (isHindi ? 'लाइव जाएं' : 'GO LIVE'),
-              style: const TextStyle(color: Colors.white,
-                  fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.5),
-            ),
-          ),
-        ),
+        _OnlineToggleBtn(helper: helper, isHindi: isHindi, isOnline: isOnline),
       ]),
     );
   }
 }
 
-// ── ongoing job section ───────────────────────────────────────────
+// ── Ongoing job section ───────────────────────────────────────────────────
 class _OngoingJobSection extends StatelessWidget {
   final String uid;
-  final bool isDark, isHindi;
-  const _OngoingJobSection(
-      {required this.uid, required this.isDark, required this.isHindi});
+  final bool isHindi;
+  const _OngoingJobSection({required this.uid, required this.isHindi});
 
   @override
   Widget build(BuildContext context) {
@@ -538,17 +456,16 @@ class _OngoingJobSection extends StatelessWidget {
         final d   = doc.data() as Map<String, dynamic>;
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Text('ONGOING JOB', style: TextStyle(
-                color: isDark ? Colors.white : _C.t1,
-                fontSize: 20, fontWeight: FontWeight.w800)),
+            const Text('ONGOING JOB',
+                style: TextStyle(
+                    color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800)),
             const SizedBox(width: 10),
-            _Chip(label: 'IN PROGRESS', bg: AppColors.onlineGreen.withOpacity(0.12),
+            _Chip(label: 'IN PROGRESS',
+                bg: AppColors.onlineGreen.withOpacity(0.12),
                 fg: AppColors.onlineGreen),
           ]),
           const SizedBox(height: 12),
-          _OngoingCard(
-              bookingId: doc.id, data: d,
-              uid: uid, isDark: isDark, isHindi: isHindi),
+          _OngoingCard(bookingId: doc.id, data: d, uid: uid, isHindi: isHindi),
           const SizedBox(height: 26),
         ]);
       },
@@ -556,14 +473,14 @@ class _OngoingJobSection extends StatelessWidget {
   }
 }
 
-// ── ongoing card (stateful: live timer + backend actions) ─────────
+// ── Ongoing card with live timer ──────────────────────────────────────────
 class _OngoingCard extends StatefulWidget {
   final String bookingId, uid;
   final Map<String, dynamic> data;
-  final bool isDark, isHindi;
+  final bool isHindi;
   const _OngoingCard({
-    required this.bookingId, required this.uid, required this.data,
-    required this.isDark, required this.isHindi,
+    required this.bookingId, required this.uid,
+    required this.data, required this.isHindi,
   });
   @override
   State<_OngoingCard> createState() => _OngoingCardState();
@@ -577,7 +494,8 @@ class _OngoingCardState extends State<_OngoingCard> {
   @override
   void initState() {
     super.initState();
-    final start = (widget.data['acceptedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    final start =
+        (widget.data['acceptedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
     _elapsed = DateTime.now().difference(start);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _elapsed += const Duration(seconds: 1));
@@ -585,7 +503,10 @@ class _OngoingCardState extends State<_OngoingCard> {
   }
 
   @override
-  void dispose() { _timer?.cancel(); super.dispose(); }
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   String get _clock {
     final h = _elapsed.inHours.toString().padLeft(2, '0');
@@ -594,14 +515,13 @@ class _OngoingCardState extends State<_OngoingCard> {
     return '$h:$m:$s';
   }
 
-  // ── quick reply → Firestore chat ──────────────────────────────
   Future<void> _reply(String msg) async {
     HapticFeedback.lightImpact();
-    final db = FirebaseFirestore.instance;
+    final db    = FirebaseFirestore.instance;
     final batch = db.batch();
-    final msgRef = db.collection('chats').doc(widget.bookingId)
+    final ref   = db.collection('chats').doc(widget.bookingId)
         .collection('messages').doc();
-    batch.set(msgRef, {
+    batch.set(ref, {
       'text': msg, 'senderId': widget.uid,
       'senderType': 'helper', 'isQuickReply': true,
       'createdAt': FieldValue.serverTimestamp(),
@@ -614,18 +534,17 @@ class _OngoingCardState extends State<_OngoingCard> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('"$msg" sent'),
-      backgroundColor: _C.green,
+      backgroundColor: _P.green,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       duration: const Duration(seconds: 2),
     ));
   }
 
-  // ── mark complete ─────────────────────────────────────────────
   Future<void> _complete() async {
     setState(() => _completing = true);
     try {
-      final db = FirebaseFirestore.instance;
+      final db    = FirebaseFirestore.instance;
       final batch = db.batch();
       batch.update(db.collection('bookings').doc(widget.bookingId), {
         'status': 'completed',
@@ -638,7 +557,7 @@ class _OngoingCardState extends State<_OngoingCard> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('🎉 Job marked complete!'),
-          backgroundColor: _C.green,
+          backgroundColor: _P.green,
           behavior: SnackBarBehavior.floating,
         ));
       }
@@ -647,16 +566,17 @@ class _OngoingCardState extends State<_OngoingCard> {
     }
   }
 
-  // ── open in maps ──────────────────────────────────────────────
   Future<void> _openMaps() async {
     final loc  = widget.data['userLocation'] as GeoPoint?;
     final addr = widget.data['address'] as String?
         ?? widget.data['userAddress'] as String? ?? '';
     Uri uri;
     if (loc != null) {
-      uri = Uri.parse('https://maps.google.com/?q=${loc.latitude},${loc.longitude}');
+      uri = Uri.parse(
+          'https://maps.google.com/?q=${loc.latitude},${loc.longitude}');
     } else if (addr.isNotEmpty) {
-      uri = Uri.parse('https://maps.google.com/?q=${Uri.encodeComponent(addr)}');
+      uri = Uri.parse(
+          'https://maps.google.com/?q=${Uri.encodeComponent(addr)}');
     } else {
       return;
     }
@@ -670,84 +590,81 @@ class _OngoingCardState extends State<_OngoingCard> {
     final d       = widget.data;
     final address = d['address'] as String? ?? d['userAddress'] as String? ?? '';
     final amount  = ((d['amount'] ?? 0) as num).toDouble();
-    final isDark  = widget.isDark;
-    final isHindi = widget.isHindi;
-
-    final replies = isHindi
+    final replies = widget.isHindi
         ? ['मैं रास्ते पर हूँ', 'पहुँच गया', 'काम शुरू हुआ', '5 मिनट में आता हूँ']
         : ["I'm on my way", 'Arrived at location', 'Job started', '5 mins away'];
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
+        color: _P.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: isDark ? AppColors.borderDark : _C.border),
+        border: Border.all(color: _P.border),
         boxShadow: [BoxShadow(
-            color: _C.purple.withOpacity(0.07),
+            color: _P.purple.withOpacity(0.07),
             blurRadius: 18, offset: const Offset(0, 5))],
       ),
       child: Column(children: [
-        // ── timer strip ─────────────────────────────────────────
+        // Timer strip
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-          decoration: BoxDecoration(
-            color: isDark ? Colors.black.withOpacity(0.15)
-                : const Color(0xFFF5F3FF),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          decoration: const BoxDecoration(
+            color: Color(0xFFF5F3FF),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Row(children: [
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // clock (image-2: large violet)
-              Text(_clock, style: const TextStyle(
-                  color: _C.purple, fontSize: 28, fontWeight: FontWeight.w800,
-                  letterSpacing: 1.5,
-                  fontFeatures: [FontFeature.tabularFigures()])),
-              Text('CURRENT SESSION TIME', style: TextStyle(
-                  color: isDark ? AppColors.textSoftDark : _C.t3,
-                  fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+              Text(_clock,
+                  style: const TextStyle(
+                      color: _P.purple, fontSize: 28, fontWeight: FontWeight.w800,
+                      letterSpacing: 1.5,
+                      fontFeatures: [FontFeature.tabularFigures()])),
+              const Text('CURRENT SESSION TIME',
+                  style: TextStyle(
+                      color: _P.t3, fontSize: 8,
+                      fontWeight: FontWeight.w700, letterSpacing: 0.8)),
             ]),
             const Spacer(),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('₹${amount.toStringAsFixed(2)}', style: TextStyle(
-                  color: isDark ? Colors.white : _C.t1,
-                  fontSize: 22, fontWeight: FontWeight.w800)),
-              Text('Fixed Rate', style: TextStyle(
-                  color: isDark ? AppColors.textSoftDark : _C.t3, fontSize: 10)),
+              Text('₹${amount.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      color: _P.t1, fontSize: 22, fontWeight: FontWeight.w800)),
+              const Text('Fixed Rate',
+                  style: TextStyle(color: _P.t3, fontSize: 10)),
             ]),
           ]),
         ),
 
-        // ── address block ───────────────────────────────────────
+        // Address
         if (address.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDark ? Colors.black.withOpacity(0.10)
-                    : const Color(0xFFF8F7FF),
+                color: const Color(0xFFF8F7FF),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: isDark ? AppColors.borderDark : _C.border),
+                border: Border.all(color: _P.border),
               ),
               child: Row(children: [
-                const Icon(Icons.location_on_rounded, color: _C.purple, size: 15),
+                const Icon(Icons.location_on_rounded, color: _P.purple, size: 15),
                 const SizedBox(width: 8),
                 Expanded(child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('DESTINATION', style: TextStyle(
-                      color: isDark ? AppColors.textSoftDark : _C.t3,
-                      fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+                  const Text('DESTINATION',
+                      style: TextStyle(
+                          color: _P.t3, fontSize: 8,
+                          fontWeight: FontWeight.w700, letterSpacing: 0.8)),
                   const SizedBox(height: 3),
-                  Text(address, style: TextStyle(
-                      color: isDark ? Colors.white : _C.t1,
-                      fontSize: 13, fontWeight: FontWeight.w600, height: 1.4)),
+                  Text(address,
+                      style: const TextStyle(
+                          color: _P.t1, fontSize: 13,
+                          fontWeight: FontWeight.w600, height: 1.4)),
                   const SizedBox(height: 4),
                   GestureDetector(
                     onTap: _openMaps,
                     child: const Text('Open in Maps ↗',
                         style: TextStyle(
-                            color: _C.purple, fontSize: 11,
+                            color: _P.purple, fontSize: 11,
                             fontWeight: FontWeight.w700)),
                   ),
                 ])),
@@ -755,36 +672,34 @@ class _OngoingCardState extends State<_OngoingCard> {
             ),
           ),
 
-        // ── quick replies ───────────────────────────────────────
+        // Quick replies
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('QUICK REPLIES', style: TextStyle(
-                color: isDark ? AppColors.textSoftDark : _C.t3,
-                fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+            const Text('QUICK REPLIES',
+                style: TextStyle(
+                    color: _P.t3, fontSize: 8,
+                    fontWeight: FontWeight.w700, letterSpacing: 0.8)),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 7,
               children: replies.map((r) => GestureDetector(
                 onTap: () => _reply(r),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 13, vertical: 7),
+                  padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
                   decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withOpacity(0.05) : _C.white,
+                      color: _P.white,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: isDark ? AppColors.borderDark
-                              : const Color(0xFFDDD6FE))),
-                  child: Text(r, style: TextStyle(
-                      color: isDark ? AppColors.textMidDark : _C.t2,
-                      fontSize: 12, fontWeight: FontWeight.w500)),
+                      border: Border.all(color: const Color(0xFFDDD6FE))),
+                  child: Text(r,
+                      style: const TextStyle(
+                          color: _P.t2, fontSize: 12, fontWeight: FontWeight.w500)),
                 ),
               )).toList(),
             ),
           ]),
         ),
 
-        // ── mark complete (image-2: full-width dark green) ──────
+        // Mark complete
         Padding(
           padding: const EdgeInsets.all(14),
           child: SizedBox(
@@ -796,7 +711,7 @@ class _OngoingCardState extends State<_OngoingCard> {
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.check_circle_rounded, size: 20),
-              label: Text(isHindi ? 'काम पूरा करें' : 'Mark Complete',
+              label: Text(widget.isHindi ? 'काम पूरा करें' : 'Mark Complete',
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w700)),
               style: ElevatedButton.styleFrom(
@@ -814,15 +729,13 @@ class _OngoingCardState extends State<_OngoingCard> {
   }
 }
 
-// ── pending requests list ─────────────────────────────────────────
+// ── Pending list ──────────────────────────────────────────────────────────
 class _PendingList extends StatelessWidget {
   final String uid;
-  final bool isDark, isHindi;
+  final bool isHindi;
   final Position? myPos;
-  const _PendingList({
-    required this.uid, required this.isDark,
-    required this.isHindi, this.myPos,
-  });
+  const _PendingList(
+      {required this.uid, required this.isHindi, this.myPos});
 
   @override
   Widget build(BuildContext context) {
@@ -835,13 +748,13 @@ class _PendingList extends StatelessWidget {
           .snapshots(),
       builder: (ctx, snap) {
         if (!snap.hasData || snap.data!.docs.isEmpty) {
-          return _VisibilityCard(isDark: isDark, isHindi: isHindi);
+          return _VisibilityCard(isHindi: isHindi);
         }
         return Column(
           children: snap.data!.docs.map((doc) => _RequestCard(
             bookingId: doc.id,
             data: doc.data() as Map<String, dynamic>,
-            uid: uid, isDark: isDark, isHindi: isHindi, myPos: myPos,
+            uid: uid, isHindi: isHindi, myPos: myPos,
           )).toList(),
         );
       },
@@ -849,18 +762,17 @@ class _PendingList extends StatelessWidget {
   }
 }
 
-// ── single request card (image-2: service icon, distance, ₹, ACCEPT+DECLINE)
+// ── Request card ──────────────────────────────────────────────────────────
 class _RequestCard extends StatelessWidget {
   final String bookingId, uid;
   final Map<String, dynamic> data;
-  final bool isDark, isHindi;
+  final bool isHindi;
   final Position? myPos;
   const _RequestCard({
     required this.bookingId, required this.uid, required this.data,
-    required this.isDark, required this.isHindi, this.myPos,
+    required this.isHindi, this.myPos,
   });
 
-  // distance string
   String _dist() {
     final loc = data['userLocation'] as GeoPoint?;
     if (loc == null || myPos == null) return '';
@@ -871,7 +783,6 @@ class _RequestCard extends StatelessWidget {
         : '${(m / 1000).toStringAsFixed(1)} km away';
   }
 
-  // time ago
   String _ago(DateTime? dt) {
     if (dt == null) return '';
     final d = DateTime.now().difference(dt);
@@ -880,32 +791,26 @@ class _RequestCard extends StatelessWidget {
     return '${d.inHours}h ago';
   }
 
-  // service icon + color
   static (IconData, Color) _svcIcon(String name) {
     final n = name.toLowerCase();
-    if (n.contains('plumb'))   return (Icons.plumbing_rounded,             Color(0xFF0EA5E9));
-    if (n.contains('electr'))  return (Icons.electrical_services_rounded,  Color(0xFFF59E0B));
-    if (n.contains('clean'))   return (Icons.cleaning_services_rounded,    Color(0xFF10B981));
+    if (n.contains('plumb'))  return (Icons.plumbing_rounded,             const Color(0xFF0EA5E9));
+    if (n.contains('electr')) return (Icons.electrical_services_rounded,  const Color(0xFFF59E0B));
+    if (n.contains('clean'))  return (Icons.cleaning_services_rounded,    const Color(0xFF10B981));
     if (n.contains('carpen') || n.contains('wood'))
-      return (Icons.handyman_rounded, Color(0xFF8B5CF6));
-    if (n.contains('paint'))   return (Icons.format_paint_rounded,         Color(0xFFEF4444));
+      return (Icons.handyman_rounded,                                      const Color(0xFF8B5CF6));
+    if (n.contains('paint'))  return (Icons.format_paint_rounded,         const Color(0xFFEF4444));
     if (n.contains('ac') || n.contains('air'))
-      return (Icons.ac_unit_rounded, Color(0xFF06B6D4));
-    if (n.contains('pest'))    return (Icons.pest_control_rounded,         Color(0xFF84CC16));
-    if (n.contains('laundry') || n.contains('wash'))
-      return (Icons.local_laundry_service_rounded, Color(0xFF6366F1));
+      return (Icons.ac_unit_rounded,                                       const Color(0xFF06B6D4));
+    if (n.contains('pest'))   return (Icons.pest_control_rounded,         const Color(0xFF84CC16));
     if (n.contains('garden') || n.contains('yard'))
-      return (Icons.yard_rounded, Color(0xFF22C55E));
-    if (n.contains('pet'))     return (Icons.pets_rounded,                 Color(0xFFF97316));
-    if (n.contains('secur') || n.contains('lock'))
-      return (Icons.security_rounded, Color(0xFF64748B));
-    return (Icons.home_repair_service_rounded, _C.purple);
+      return (Icons.yard_rounded,                                          const Color(0xFF22C55E));
+    if (n.contains('pet'))    return (Icons.pets_rounded,                 const Color(0xFFF97316));
+    return (Icons.home_repair_service_rounded, _P.purple);
   }
 
   @override
   Widget build(BuildContext context) {
     final svc    = data['serviceName'] as String? ?? 'Service';
-    final user   = data['userName']    as String? ?? 'Customer';
     final amount = ((data['amount'] ?? 0) as num).toDouble();
     final ts     = (data['createdAt'] as Timestamp?)?.toDate();
     final dist   = _dist();
@@ -914,19 +819,17 @@ class _RequestCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
+        color: _P.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: isDark ? AppColors.borderDark : _C.border),
+        border: Border.all(color: _P.border),
         boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.1 : 0.04),
+            color: Colors.black.withOpacity(0.04),
             blurRadius: 12, offset: const Offset(0, 3))],
       ),
       child: Column(children: [
-        // info
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
           child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            // service icon box
             Container(
               width: 52, height: 52,
               decoration: BoxDecoration(
@@ -937,50 +840,45 @@ class _RequestCard extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(svc, style: TextStyle(
-                  color: isDark ? Colors.white : _C.t1,
-                  fontSize: 15, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              // distance + time row (image-2 style)
+              Text(svc,
+                  style: const TextStyle(
+                      color: _P.t1, fontSize: 15, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
               Row(children: [
                 if (dist.isNotEmpty) ...[
-                  const Icon(Icons.near_me_rounded, size: 11, color: _C.purple),
+                  const Icon(Icons.near_me_rounded, size: 11, color: _P.purple),
                   const SizedBox(width: 3),
-                  Text(dist, style: const TextStyle(
-                      color: _C.purple, fontSize: 11,
-                      fontWeight: FontWeight.w600)),
+                  Text(dist,
+                      style: const TextStyle(
+                          color: _P.purple, fontSize: 11,
+                          fontWeight: FontWeight.w600)),
                   const SizedBox(width: 8),
-                  Container(width: 3, height: 3, decoration: BoxDecoration(
-                      color: _C.t3, shape: BoxShape.circle)),
+                  Container(width: 3, height: 3,
+                      decoration: const BoxDecoration(
+                          color: _P.t3, shape: BoxShape.circle)),
                   const SizedBox(width: 8),
                 ],
                 if (ts != null)
-                  Text(_ago(ts), style: TextStyle(
-                      color: isDark ? AppColors.textSoftDark : _C.t3,
-                      fontSize: 11)),
+                  Text(_ago(ts),
+                      style: const TextStyle(color: _P.t3, fontSize: 11)),
               ]),
             ])),
-            // amount (image-2: large, right)
-            Text('₹${amount.toStringAsFixed(0)}', style: TextStyle(
-                color: isDark ? Colors.white : _C.t1,
-                fontSize: 20, fontWeight: FontWeight.w800)),
+            Text('₹${amount.toStringAsFixed(0)}',
+                style: const TextStyle(
+                    color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800)),
           ]),
         ),
-
-        Divider(height: 1, color: isDark ? AppColors.borderDark : _C.border),
-
-        // buttons (image-2: green ACCEPT pill / plain DECLINE text)
+        Divider(height: 1, color: _P.border),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(children: [
-            // ACCEPT — dominant green pill
             Expanded(flex: 3, child: ElevatedButton(
               onPressed: () {
                 HapticFeedback.mediumImpact();
                 _accept(context);
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: _C.green, foregroundColor: Colors.white,
+                backgroundColor: _P.green, foregroundColor: Colors.white,
                 elevation: 0, padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(22)),
@@ -991,11 +889,10 @@ class _RequestCard extends StatelessWidget {
                       letterSpacing: 0.6)),
             )),
             const SizedBox(width: 10),
-            // DECLINE — ghost text (image-2 style)
             Expanded(flex: 2, child: TextButton(
               onPressed: _decline,
               style: TextButton.styleFrom(
-                foregroundColor: isDark ? AppColors.textMidDark : _C.t2,
+                foregroundColor: _P.t2,
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
               child: Text(isHindi ? 'मना करें' : 'DECLINE',
@@ -1032,43 +929,39 @@ class _RequestCard extends StatelessWidget {
   }
 }
 
-// ── visibility active (empty state, image-2 bottom card) ─────────
+// ── Visibility active empty card ──────────────────────────────────────────
 class _VisibilityCard extends StatelessWidget {
-  final bool isDark, isHindi;
-  const _VisibilityCard({required this.isDark, required this.isHindi});
+  final bool isHindi;
+  const _VisibilityCard({required this.isHindi});
 
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
     decoration: BoxDecoration(
-      color: isDark ? AppColors.cardDark : const Color(0xFFF0EEFF),
+      color: const Color(0xFFF0EEFF),
       borderRadius: BorderRadius.circular(20),
-      border: Border.all(
-          color: isDark ? AppColors.borderDark : const Color(0xFFDDD6FE)),
+      border: Border.all(color: const Color(0xFFDDD6FE)),
     ),
     child: Column(children: [
       Container(
         width: 64, height: 64,
         decoration: BoxDecoration(
-            color: _C.purple.withOpacity(0.10), shape: BoxShape.circle),
-        child: const Icon(Icons.gps_fixed_rounded, color: _C.purple, size: 28),
+            color: _P.purple.withOpacity(0.10), shape: BoxShape.circle),
+        child: const Icon(Icons.gps_fixed_rounded, color: _P.purple, size: 28),
       ),
       const SizedBox(height: 16),
       Text(isHindi ? 'विज़िबिलिटी एक्टिव' : 'Visibility Active',
-          style: TextStyle(
-              color: isDark ? Colors.white : _C.purple,
-              fontSize: 17, fontWeight: FontWeight.w800)),
+          style: const TextStyle(
+              color: _P.purple, fontSize: 17, fontWeight: FontWeight.w800)),
       const SizedBox(height: 10),
       RichText(text: TextSpan(
-        style: TextStyle(
-            color: isDark ? AppColors.textMidDark : _C.t2,
-            fontSize: 13, height: 1.6),
+        style: const TextStyle(color: _P.t2, fontSize: 13, height: 1.6),
         children: [
           TextSpan(text: isHindi
               ? 'आप ऑनलाइन हैं और '
               : "You're online and visible to customers in a "),
           const TextSpan(text: '5 km radius',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+              style: TextStyle(fontWeight: FontWeight.w700, color: _P.t1)),
           TextSpan(text: isHindi
               ? ' के ग्राहकों को दिख रहे हैं।\nनए अनुरोध तुरंत यहाँ दिखेंगे।'
               : '. New requests will appear here instantly.'),
@@ -1078,10 +971,10 @@ class _VisibilityCard extends StatelessWidget {
   );
 }
 
-// ── history button ────────────────────────────────────────────────
+// ── History button ────────────────────────────────────────────────────────
 class _HistoryBtn extends StatelessWidget {
-  final bool isDark, isHindi;
-  const _HistoryBtn({required this.isDark, required this.isHindi});
+  final bool isHindi;
+  const _HistoryBtn({required this.isHindi});
 
   @override
   Widget build(BuildContext context) => GestureDetector(
@@ -1090,27 +983,23 @@ class _HistoryBtn extends StatelessWidget {
     child: Container(
       padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
       decoration: BoxDecoration(
-          color: isDark ? AppColors.cardDark : _C.white,
+          color: _P.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: isDark ? AppColors.borderDark : _C.border)),
+          border: Border.all(color: _P.border)),
       child: Row(children: [
         Container(
           width: 38, height: 38,
           decoration: BoxDecoration(
-              color: _C.purple.withOpacity(0.08),
+              color: _P.purple.withOpacity(0.08),
               borderRadius: BorderRadius.circular(10)),
-          child: const Icon(Icons.work_history_rounded,
-              color: _C.purple, size: 18),
+          child: const Icon(Icons.work_history_rounded, color: _P.purple, size: 18),
         ),
         const SizedBox(width: 12),
         Expanded(child: Text(
             isHindi ? 'सभी पुराने काम देखें' : 'View All Job History',
-            style: TextStyle(
-                color: isDark ? Colors.white : _C.t1,
-                fontSize: 14, fontWeight: FontWeight.w600))),
-        Icon(Icons.arrow_forward_ios_rounded, size: 12,
-            color: isDark ? AppColors.textSoftDark : _C.t3),
+            style: const TextStyle(
+                color: _P.t1, fontSize: 14, fontWeight: FontWeight.w600))),
+        const Icon(Icons.arrow_forward_ios_rounded, size: 12, color: _P.t3),
       ]),
     ),
   );
@@ -1127,34 +1016,27 @@ class _HomeTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final helper  = context.watch<AuthProvider>().helper;
-    final isDark  = Theme.of(context).brightness == Brightness.dark;
     final uid     = helper?.uid ?? '';
     final isHindi = context.watch<LanguageProvider>().isHindi;
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : _C.bg,
+      backgroundColor: _P.bg,
       body: CustomScrollView(slivers: [
         SliverToBoxAdapter(child: _GreetingHeader(helper: helper)),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
           sliver: SliverList(delegate: SliverChildListDelegate([
-            // 1. Online toggle
-            _ToggleCard(helper: helper, isDark: isDark, isHindi: isHindi),
+            _ToggleCard(helper: helper, isHindi: isHindi),
             const SizedBox(height: 14),
-            // 2. Today's earnings + goal ring
-            _EarningsCard(uid: uid, isDark: isDark, isHindi: isHindi),
+            _EarningsCard(uid: uid, isHindi: isHindi),
             const SizedBox(height: 14),
-            // 3. Stats chips
-            _StatsRow(uid: uid, isDark: isDark),
+            _StatsRow(uid: uid),
             const SizedBox(height: 18),
-            // 4. Requests waiting banner
-            _WaitingBanner(isDark: isDark, isHindi: isHindi, onTap: onGoJobs),
+            _WaitingBanner(isHindi: isHindi, onTap: onGoJobs),
             const SizedBox(height: 22),
-            // 5. Recent activity
-            _SecHead(title: isHindi ? 'हालिया गतिविधि' : 'Recent Activity',
-                isDark: isDark),
+            _SecHead(title: isHindi ? 'हालिया गतिविधि' : 'Recent Activity'),
             const SizedBox(height: 12),
-            _ActivityList(uid: uid, isDark: isDark),
+            _ActivityList(uid: uid),
           ])),
         ),
       ]),
@@ -1162,27 +1044,34 @@ class _HomeTab extends StatelessWidget {
   }
 }
 
-// ── greeting header (image-1 style) ──────────────────────────────
+// ── Greeting header (Image-1 style) ───────────────────────────────────────
 class _GreetingHeader extends StatefulWidget {
   final HelperModel? helper;
   const _GreetingHeader({required this.helper});
   @override
   State<_GreetingHeader> createState() => _GreetingHeaderState();
 }
+
 class _GreetingHeaderState extends State<_GreetingHeader>
     with SingleTickerProviderStateMixin {
   late final AnimationController _p;
   late final Animation<double> _a;
+
   @override
   void initState() {
     super.initState();
-    _p = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))
+    _p = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1100))
       ..repeat(reverse: true);
     _a = Tween(begin: 0.3, end: 1.0)
         .animate(CurvedAnimation(parent: _p, curve: Curves.easeInOut));
   }
+
   @override
-  void dispose() { _p.dispose(); super.dispose(); }
+  void dispose() {
+    _p.dispose();
+    super.dispose();
+  }
 
   static String _greet() {
     final h = DateTime.now().hour;
@@ -1191,6 +1080,7 @@ class _GreetingHeaderState extends State<_GreetingHeader>
     if (h < 20) return 'Good Evening';
     return 'Good Night';
   }
+
   static String _emoji() {
     final h = DateTime.now().hour;
     if (h < 12) return '☀️';
@@ -1213,32 +1103,32 @@ class _GreetingHeaderState extends State<_GreetingHeader>
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: [_C.indigo, Color(0xFF4C1D95), _C.purple],
+          colors: [_P.indigo, Color(0xFF4C1D95), _P.purple],
         ),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Row: welcome pill + avatar with pulse
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // welcome pill (image-1)
+          // Welcome pill
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
             decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: Colors.white.withOpacity(0.25))),
-            child: const Text('WELCOME BACK', style: TextStyle(
-                color: Colors.white, fontSize: 9,
-                fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+            child: const Text('WELCOME BACK',
+                style: TextStyle(color: Colors.white, fontSize: 9,
+                    fontWeight: FontWeight.w700, letterSpacing: 1.2)),
           ),
           const Spacer(),
-          // avatar + pulse dot (image-1 right side)
+          // Avatar + pulse
           Stack(clipBehavior: Clip.none, children: [
             Container(
               width: 50, height: 50,
               decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.18),
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withOpacity(0.35), width: 2)),
+                  border: Border.all(
+                      color: Colors.white.withOpacity(0.35), width: 2)),
               child: Center(child: Text(h?.initials ?? 'SK',
                   style: const TextStyle(color: Colors.white,
                       fontSize: 15, fontWeight: FontWeight.w800))),
@@ -1253,19 +1143,19 @@ class _GreetingHeaderState extends State<_GreetingHeader>
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 2),
                           boxShadow: [BoxShadow(
-                              color: AppColors.onlineGreen.withOpacity(_a.value * 0.8),
+                              color: AppColors.onlineGreen
+                                  .withOpacity(_a.value * 0.8),
                               blurRadius: 8, spreadRadius: 2)]),
                     )),
               ),
           ]),
         ]),
         const SizedBox(height: 20),
-        // greeting (image-1)
-        Text('${_greet()} ${_emoji()}, $first', style: const TextStyle(
-            color: Colors.white, fontSize: 26,
-            fontWeight: FontWeight.w800, height: 1.2)),
+        Text('${_greet()} ${_emoji()}, $first',
+            style: const TextStyle(color: Colors.white,
+                fontSize: 26, fontWeight: FontWeight.w800, height: 1.2)),
         const SizedBox(height: 16),
-        // location pill (image-1)
+        // Location pill
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
           decoration: BoxDecoration(
@@ -1275,8 +1165,10 @@ class _GreetingHeaderState extends State<_GreetingHeader>
           child: const Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.location_on_rounded, color: Colors.white70, size: 13),
             SizedBox(width: 5),
-            Text('Surat, Gujarat', style: TextStyle(
-                color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+            Text('Surat, Gujarat',
+                style: TextStyle(
+                    color: Colors.white, fontSize: 12,
+                    fontWeight: FontWeight.w600)),
             SizedBox(width: 4),
             Icon(Icons.keyboard_arrow_down_rounded,
                 color: Colors.white60, size: 15),
@@ -1287,12 +1179,11 @@ class _GreetingHeaderState extends State<_GreetingHeader>
   }
 }
 
-// ── online toggle ─────────────────────────────────────────────────
+// ── Online toggle card ────────────────────────────────────────────────────
 class _ToggleCard extends StatelessWidget {
   final HelperModel? helper;
-  final bool isDark, isHindi;
-  const _ToggleCard(
-      {required this.helper, required this.isDark, required this.isHindi});
+  final bool isHindi;
+  const _ToggleCard({required this.helper, required this.isHindi});
 
   @override
   Widget build(BuildContext context) {
@@ -1300,47 +1191,40 @@ class _ToggleCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       decoration: BoxDecoration(
-          color: isDark ? AppColors.cardDark : _C.white,
+          color: _P.white,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
               color: on
                   ? AppColors.onlineGreen.withOpacity(0.25)
-                  : (isDark ? AppColors.borderDark : _C.border)),
+                  : _P.border),
           boxShadow: [BoxShadow(
-              color: Colors.black.withOpacity(isDark ? 0.10 : 0.04),
+              color: Colors.black.withOpacity(0.04),
               blurRadius: 8, offset: const Offset(0, 2))]),
       child: Row(children: [
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('SERVICE STATUS', style: TextStyle(
-              color: isDark ? AppColors.textSoftDark : _C.t3,
-              fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.1)),
+          const Text('SERVICE STATUS',
+              style: TextStyle(
+                  color: _P.t3, fontSize: 9,
+                  fontWeight: FontWeight.w700, letterSpacing: 1.1)),
           const SizedBox(height: 4),
           Text(on
               ? (isHindi ? 'अभी ऑनलाइन हैं' : 'Currently Online')
               : (isHindi ? 'अभी ऑफलाइन हैं' : 'Currently Offline'),
-              style: TextStyle(
-                  color: isDark ? Colors.white : _C.t1,
-                  fontSize: 15, fontWeight: FontWeight.w700)),
+              style: const TextStyle(
+                  color: _P.t1, fontSize: 15, fontWeight: FontWeight.w700)),
         ]),
         const Spacer(),
-        Transform.scale(scale: 1.1, child: Switch(
-          value: on, activeColor: AppColors.onlineGreen,
-          onChanged: (_) {
-            HapticFeedback.mediumImpact();
-            context.read<AuthProvider>().toggleOnlineStatus();
-          },
-        )),
+        _OnlineToggleBtn(helper: helper, isHindi: isHindi, isOnline: on),
       ]),
     );
   }
 }
 
-// ── today earnings + goal ring ────────────────────────────────────
+// ── Today earnings + goal ring ────────────────────────────────────────────
 class _EarningsCard extends StatelessWidget {
   final String uid;
-  final bool isDark, isHindi;
-  const _EarningsCard(
-      {required this.uid, required this.isDark, required this.isHindi});
+  final bool isHindi;
+  const _EarningsCard({required this.uid, required this.isHindi});
 
   @override
   Widget build(BuildContext context) {
@@ -1369,54 +1253,51 @@ class _EarningsCard extends StatelessWidget {
         return Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
-              color: isDark ? AppColors.cardDark : _C.white,
+              color: _P.white,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                  color: isDark ? AppColors.borderDark : _C.border),
+              border: Border.all(color: _P.border),
               boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? 0.10 : 0.04),
+                  color: Colors.black.withOpacity(0.04),
                   blurRadius: 12, offset: const Offset(0, 3))]),
           child: Row(children: [
             Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(isHindi ? 'आज की कमाई' : "Today's Earnings",
-                  style: TextStyle(
-                      color: isDark ? AppColors.textMidDark : _C.t2,
-                      fontSize: 11, fontWeight: FontWeight.w600)),
+                  style: const TextStyle(
+                      color: _P.t2, fontSize: 11, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
-              Text('₹ ${total.toStringAsFixed(2)}', style: TextStyle(
-                  color: isDark ? Colors.white : _C.t1,
-                  fontSize: 28, fontWeight: FontWeight.w800)),
+              Text('₹ ${total.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      color: _P.t1, fontSize: 28, fontWeight: FontWeight.w800)),
               if (jobs > 0) ...[
                 const SizedBox(height: 4),
                 Row(children: [
-                  const Icon(Icons.check_circle_rounded, color: _C.green, size: 13),
+                  const Icon(Icons.check_circle_rounded,
+                      color: _P.green, size: 13),
                   const SizedBox(width: 4),
-                  Text('$jobs ${isHindi ? 'काम पूरे' : 'job${jobs > 1 ? "s" : ""} done'}',
+                  Text(
+                      '$jobs ${isHindi ? 'काम पूरे' : 'job${jobs > 1 ? "s" : ""} done'}',
                       style: const TextStyle(
-                          color: _C.green, fontSize: 11,
+                          color: _P.green, fontSize: 11,
                           fontWeight: FontWeight.w600)),
                 ]),
               ],
               const SizedBox(height: 12),
               Row(children: [
-                Text(isHindi ? 'लक्ष्य' : 'Daily Goal', style: TextStyle(
-                    color: isDark ? AppColors.textSoftDark : _C.t3,
-                    fontSize: 10)),
+                Text(isHindi ? 'लक्ष्य' : 'Daily Goal',
+                    style: const TextStyle(color: _P.t3, fontSize: 10)),
                 const Spacer(),
                 Text('₹${total.toStringAsFixed(0)} / ₹${goal.toInt()}',
-                    style: TextStyle(
-                        color: isDark ? AppColors.textSoftDark : _C.t3,
-                        fontSize: 10, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(
+                        color: _P.t3, fontSize: 10, fontWeight: FontWeight.w600)),
               ]),
               const SizedBox(height: 5),
               ClipRRect(borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
                   value: pct, minHeight: 5,
-                  backgroundColor:
-                  isDark ? AppColors.borderDark : const Color(0xFFEDE9FE),
+                  backgroundColor: const Color(0xFFEDE9FE),
                   valueColor: AlwaysStoppedAnimation<Color>(
-                      pct >= 1.0 ? _C.green : _C.purple),
+                      pct >= 1.0 ? _P.green : _P.purple),
                 ),
               ),
             ])),
@@ -1424,14 +1305,13 @@ class _EarningsCard extends StatelessWidget {
             SizedBox(width: 80, height: 80,
               child: Stack(alignment: Alignment.center, children: [
                 CustomPaint(size: const Size(80, 80),
-                    painter: _RingPainter(pct: pct, isDark: isDark)),
+                    painter: _RingPainter(pct: pct)),
                 Column(mainAxisSize: MainAxisSize.min, children: [
-                  Text('${(pct * 100).toInt()}%', style: TextStyle(
-                      color: isDark ? Colors.white : _C.t1,
-                      fontSize: 16, fontWeight: FontWeight.w800)),
-                  Text(isHindi ? 'लक्ष्य' : 'goal', style: TextStyle(
-                      color: isDark ? AppColors.textSoftDark : _C.t3,
-                      fontSize: 9)),
+                  Text('${(pct * 100).toInt()}%',
+                      style: const TextStyle(
+                          color: _P.t1, fontSize: 16, fontWeight: FontWeight.w800)),
+                  Text(isHindi ? 'लक्ष्य' : 'goal',
+                      style: const TextStyle(color: _P.t3, fontSize: 9)),
                 ]),
               ]),
             ),
@@ -1443,34 +1323,37 @@ class _EarningsCard extends StatelessWidget {
 }
 
 class _RingPainter extends CustomPainter {
-  final double pct; final bool isDark;
-  const _RingPainter({required this.pct, required this.isDark});
+  final double pct;
+  const _RingPainter({required this.pct});
   @override
   void paint(Canvas c, Size sz) {
     final cx = sz.width / 2, cy = sz.height / 2, r = cx - 6;
     final track = Paint()
-      ..color = isDark ? const Color(0xFF3B2070) : const Color(0xFFEDE9FE)
+      ..color = const Color(0xFFEDE9FE)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 7 ..strokeCap = StrokeCap.round;
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round;
     final fill = Paint()
-      ..shader = const LinearGradient(
-          colors: [_C.purple, Color(0xFF06B6D4)])
+      ..shader = const LinearGradient(colors: [_P.purple, Color(0xFF06B6D4)])
           .createShader(Rect.fromCircle(center: Offset(cx, cy), radius: r))
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 7 ..strokeCap = StrokeCap.round;
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round;
     c.drawCircle(Offset(cx, cy), r, track);
     if (pct > 0) {
       c.drawArc(Rect.fromCircle(center: Offset(cx, cy), radius: r),
           -math.pi / 2, 2 * math.pi * pct, false, fill);
     }
   }
-  @override bool shouldRepaint(_RingPainter o) => o.pct != pct;
+
+  @override
+  bool shouldRepaint(_RingPainter o) => o.pct != pct;
 }
 
-// ── stats row ─────────────────────────────────────────────────────
+// ── Stats row ─────────────────────────────────────────────────────────────
 class _StatsRow extends StatelessWidget {
-  final String uid; final bool isDark;
-  const _StatsRow({required this.uid, required this.isDark});
+  final String uid;
+  const _StatsRow({required this.uid});
 
   @override
   Widget build(BuildContext context) {
@@ -1488,15 +1371,14 @@ class _StatsRow extends StatelessWidget {
         }
         return Row(children: [
           Expanded(child: _StatChip(
-              icon: Icons.star_rounded, color: _C.amber, label: 'RATING',
+              icon: Icons.star_rounded, color: _P.amber, label: 'RATING',
               value: rating == 0 ? '–' : rating.toStringAsFixed(1),
-              sub: reviews > 0 ? '$reviews reviews' : 'No reviews',
-              isDark: isDark)),
+              sub: reviews > 0 ? '$reviews reviews' : 'No reviews')),
           const SizedBox(width: 12),
           Expanded(child: _StatChip(
-              icon: Icons.check_circle_rounded, color: _C.green,
+              icon: Icons.check_circle_rounded, color: _P.green,
               label: 'JOBS DONE', value: '$done',
-              sub: '$done completed', isDark: isDark)),
+              sub: '$done completed')),
         ]);
       },
     );
@@ -1504,56 +1386,56 @@ class _StatsRow extends StatelessWidget {
 }
 
 class _StatChip extends StatelessWidget {
-  final IconData icon; final Color color;
-  final String label, value, sub; final bool isDark;
+  final IconData icon;
+  final Color color;
+  final String label, value, sub;
   const _StatChip({
     required this.icon, required this.color,
-    required this.label, required this.value,
-    required this.sub, required this.isDark,
+    required this.label, required this.value, required this.sub,
   });
+
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
+        color: _P.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: isDark ? AppColors.borderDark : _C.border),
+        border: Border.all(color: _P.border),
         boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.10 : 0.03),
+            color: Colors.black.withOpacity(0.03),
             blurRadius: 8, offset: const Offset(0, 2))]),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label, style: TextStyle(
-          color: isDark ? AppColors.textSoftDark : _C.t3,
-          fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.0)),
+      Text(label,
+          style: const TextStyle(
+              color: _P.t3, fontSize: 9,
+              fontWeight: FontWeight.w700, letterSpacing: 1.0)),
       const SizedBox(height: 8),
       Row(children: [
         Icon(icon, color: color, size: 20),
         const SizedBox(width: 7),
-        Text(value, style: TextStyle(
-            color: isDark ? Colors.white : _C.t1,
-            fontSize: 22, fontWeight: FontWeight.w800)),
+        Text(value,
+            style: const TextStyle(
+                color: _P.t1, fontSize: 22, fontWeight: FontWeight.w800)),
       ]),
       const SizedBox(height: 2),
-      Text(sub, style: TextStyle(
-          color: isDark ? AppColors.textMidDark : _C.t2, fontSize: 11)),
+      Text(sub, style: const TextStyle(color: _P.t2, fontSize: 11)),
     ]),
   );
 }
 
-// ── waiting banner ────────────────────────────────────────────────
+// ── Waiting banner (taps to Jobs) ─────────────────────────────────────────
 class _WaitingBanner extends StatelessWidget {
-  final bool isDark, isHindi;
+  final bool isHindi;
   final VoidCallback? onTap;
-  const _WaitingBanner(
-      {required this.isDark, required this.isHindi, this.onTap});
+  const _WaitingBanner({required this.isHindi, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('bookings')
-          .where('status', isEqualTo: 'pending').snapshots(),
+          .where('status', isEqualTo: 'pending')
+          .snapshots(),
       builder: (ctx, snap) {
         final n = snap.data?.docs.length ?? 0;
         if (n == 0) return const SizedBox.shrink();
@@ -1563,40 +1445,39 @@ class _WaitingBanner extends StatelessWidget {
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: [
-                _C.purple.withOpacity(0.07),
-                _C.purple.withOpacity(0.02),
+                _P.purple.withOpacity(0.07),
+                _P.purple.withOpacity(0.02),
               ]),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _C.purple.withOpacity(0.18)),
+              border: Border.all(color: _P.purple.withOpacity(0.18)),
             ),
             child: Row(children: [
               Container(
                 width: 44, height: 44,
                 decoration: BoxDecoration(
-                    color: _C.purple.withOpacity(0.10),
+                    color: _P.purple.withOpacity(0.10),
                     borderRadius: BorderRadius.circular(12)),
                 child: Stack(alignment: Alignment.center, children: [
                   const Icon(Icons.notifications_active_rounded,
-                      color: _C.purple, size: 22),
-                  Positioned(top: 6, right: 6, child: Container(
-                      width: 8, height: 8, decoration: const BoxDecoration(
-                      color: _C.red, shape: BoxShape.circle))),
+                      color: _P.purple, size: 22),
+                  Positioned(top: 6, right: 6,
+                      child: Container(width: 8, height: 8,
+                          decoration: const BoxDecoration(
+                              color: _P.red, shape: BoxShape.circle))),
                 ]),
               ),
               const SizedBox(width: 12),
               Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('$n ${isHindi ? 'नए अनुरोध' : 'New Request${n > 1 ? "s" : ""}'}',
-                    style: TextStyle(
-                        color: isDark ? Colors.white : _C.t1,
-                        fontSize: 14, fontWeight: FontWeight.w700)),
+                Text(
+                    '$n ${isHindi ? 'नए अनुरोध' : 'New Request${n > 1 ? "s" : ""}'}',
+                    style: const TextStyle(
+                        color: _P.t1, fontSize: 14, fontWeight: FontWeight.w700)),
                 Text(isHindi ? 'जॉब्स टैब पर देखें' : 'Tap to view in Jobs tab',
-                    style: TextStyle(
-                        color: isDark ? AppColors.textMidDark : _C.t2,
-                        fontSize: 11)),
+                    style: const TextStyle(color: _P.t2, fontSize: 11)),
               ])),
               const Icon(Icons.arrow_forward_ios_rounded,
-                  size: 13, color: _C.purple),
+                  size: 13, color: _P.purple),
             ]),
           ),
         );
@@ -1605,17 +1486,17 @@ class _WaitingBanner extends StatelessWidget {
   }
 }
 
-// ── recent activity list ──────────────────────────────────────────
+// ── Recent activity list ──────────────────────────────────────────────────
 class _ActivityList extends StatelessWidget {
-  final String uid; final bool isDark;
-  const _ActivityList({required this.uid, required this.isDark});
+  final String uid;
+  const _ActivityList({required this.uid});
 
   static (IconData, Color) _meta(String s) {
     switch (s.toLowerCase()) {
-      case 'completed':   return (Icons.check_circle_rounded,  _C.green);
-      case 'accepted':    return (Icons.handshake_rounded,     _C.purple);
+      case 'completed':   return (Icons.check_circle_rounded,  _P.green);
+      case 'accepted':    return (Icons.handshake_rounded,     _P.purple);
       case 'in_progress': return (Icons.play_circle_rounded,   AppColors.onlineGreen);
-      case 'pending':     return (Icons.pending_rounded,       _C.amber);
+      case 'pending':     return (Icons.pending_rounded,       _P.amber);
       default:            return (Icons.cancel_rounded,        AppColors.danger);
     }
   }
@@ -1635,34 +1516,30 @@ class _ActivityList extends StatelessWidget {
       stream: FirebaseFirestore.instance.collection('bookings')
           .where('helperId', isEqualTo: uid)
           .orderBy('createdAt', descending: true)
-          .limit(6).snapshots(),
+          .limit(6)
+          .snapshots(),
       builder: (ctx, snap) {
         if (!snap.hasData || snap.data!.docs.isEmpty) {
           return Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-                color: isDark ? AppColors.cardDark : _C.white,
+                color: _P.white,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                    color: isDark ? AppColors.borderDark : _C.border)),
-            child: Center(child: Text('No activity yet',
-                style: TextStyle(
-                    color: isDark ? AppColors.textMidDark : _C.t2,
-                    fontSize: 13))),
+                border: Border.all(color: _P.border)),
+            child: const Center(child: Text('No activity yet',
+                style: TextStyle(color: _P.t2, fontSize: 13))),
           );
         }
         return Container(
           decoration: BoxDecoration(
-              color: isDark ? AppColors.cardDark : _C.white,
+              color: _P.white,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                  color: isDark ? AppColors.borderDark : _C.border),
+              border: Border.all(color: _P.border),
               boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? 0.10 : 0.03),
+                  color: Colors.black.withOpacity(0.03),
                   blurRadius: 8, offset: const Offset(0, 2))]),
           child: Column(children: snap.data!.docs.asMap().entries.map((e) {
-            final doc    = e.value;
-            final d      = doc.data() as Map<String, dynamic>;
+            final d      = e.value.data() as Map<String, dynamic>;
             final status = d['status'] as String? ?? 'pending';
             final svc    = d['serviceName'] as String? ?? 'Service';
             final amt    = ((d['amount'] ?? 0) as num).toDouble();
@@ -1671,7 +1548,8 @@ class _ActivityList extends StatelessWidget {
             final (icon, color) = _meta(status);
             return Column(children: [
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 11),
                 child: Row(children: [
                   Container(width: 36, height: 36,
                       decoration: BoxDecoration(
@@ -1680,677 +1558,39 @@ class _ActivityList extends StatelessWidget {
                       child: Icon(icon, color: color, size: 16)),
                   const SizedBox(width: 12),
                   Expanded(child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(svc, style: TextStyle(
-                        color: isDark ? Colors.white : _C.t1,
-                        fontSize: 13, fontWeight: FontWeight.w600)),
-                    Text(status.toUpperCase(), style: TextStyle(
-                        color: isDark ? AppColors.textMidDark : _C.t3,
-                        fontSize: 9, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-                  ])),
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(svc,
+                            style: const TextStyle(
+                                color: _P.t1, fontSize: 13,
+                                fontWeight: FontWeight.w600)),
+                        Text(status.toUpperCase(),
+                            style: const TextStyle(
+                                color: _P.t3, fontSize: 9,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.5)),
+                      ])),
                   Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                     Text(status == 'completed'
                         ? '+₹${amt.toStringAsFixed(0)}'
                         : '₹${amt.toStringAsFixed(0)}',
                         style: TextStyle(
-                            color: status == 'completed' ? _C.green
-                                : (isDark ? AppColors.textMidDark : _C.t2),
+                            color: status == 'completed' ? _P.green : _P.t2,
                             fontSize: 13, fontWeight: FontWeight.w700)),
-                    if (ts != null) Text(_ago(ts), style: TextStyle(
-                        color: isDark ? AppColors.textSoftDark : _C.t3,
-                        fontSize: 10)),
+                    if (ts != null)
+                      Text(_ago(ts),
+                          style: const TextStyle(color: _P.t3, fontSize: 10)),
                   ]),
                 ]),
               ),
-              if (!isLast) Divider(height: 1,
-                  color: isDark ? AppColors.borderDark : _C.divider,
-                  indent: 14, endIndent: 14),
+              if (!isLast)
+                Divider(height: 1, color: _P.div, indent: 14, endIndent: 14),
             ]);
           }).toList()),
         );
       },
     );
   }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// EARN TAB — Day / Week / Month toggle + simple bar chart + transactions
-// ═══════════════════════════════════════════════════════════════════════════
-class _EarnTab extends StatefulWidget {
-  const _EarnTab();
-  @override
-  State<_EarnTab> createState() => _EarnTabState();
-}
-
-class _EarnTabState extends State<_EarnTab> {
-  int _period = 0; // 0 = Day, 1 = Week, 2 = Month
-
-  DateTime get _start {
-    final n = DateTime.now();
-    if (_period == 0) return DateTime(n.year, n.month, n.day);
-    if (_period == 1) return n.subtract(Duration(days: n.weekday - 1));
-    return DateTime(n.year, n.month, 1);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final helper  = context.watch<AuthProvider>().helper;
-    final uid     = helper?.uid ?? '';
-    final isDark  = Theme.of(context).brightness == Brightness.dark;
-    final isHindi = context.watch<LanguageProvider>().isHindi;
-
-    return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : _C.bg,
-      body: CustomScrollView(slivers: [
-        SliverToBoxAdapter(child: _EarnHeader(isDark: isDark, isHindi: isHindi)),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-          sliver: SliverList(delegate: SliverChildListDelegate([
-            // Period toggle
-            _PeriodToggle(selected: _period,
-                onSelect: (i) => setState(() => _period = i),
-                isDark: isDark, isHindi: isHindi),
-            const SizedBox(height: 16),
-            // Summary + chart
-            _EarnSummary(uid: uid, start: _start,
-                period: _period, isDark: isDark, isHindi: isHindi),
-            const SizedBox(height: 16),
-            // Withdraw button
-            _WithdrawBtn(isDark: isDark, isHindi: isHindi),
-            const SizedBox(height: 22),
-            // Transactions
-            _SecHead(title: isHindi ? 'लेनदेन' : 'Transactions', isDark: isDark),
-            const SizedBox(height: 12),
-            _TransactionList(uid: uid, start: _start, isDark: isDark),
-          ])),
-        ),
-      ]),
-    );
-  }
-}
-
-class _EarnHeader extends StatelessWidget {
-  final bool isDark, isHindi;
-  const _EarnHeader({required this.isDark, required this.isHindi});
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: EdgeInsets.only(
-      top: MediaQuery.of(context).padding.top + 16,
-      bottom: 18, left: 16, right: 16,
-    ),
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft, end: Alignment.bottomRight,
-        colors: [_C.indigo, _C.violet, _C.purple],
-      ),
-    ),
-    child: Row(children: [
-      Container(width: 38, height: 38,
-          decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12)),
-          child: const Icon(Icons.wallet_rounded, color: Colors.white, size: 20)),
-      const SizedBox(width: 12),
-      Text(isHindi ? 'मेरी कमाई' : 'My Earnings', style: const TextStyle(
-          color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
-      const Spacer(),
-      const NotificationBell(isDark: false),
-    ]),
-  );
-}
-
-class _PeriodToggle extends StatelessWidget {
-  final int selected;
-  final void Function(int) onSelect;
-  final bool isDark, isHindi;
-  const _PeriodToggle({
-    required this.selected, required this.onSelect,
-    required this.isDark, required this.isHindi,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final labels = isHindi
-        ? ['आज', 'इस हफ्ते', 'इस महीने']
-        : ['Today', 'This Week', 'This Month'];
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-          color: isDark ? AppColors.cardDark : _C.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: isDark ? AppColors.borderDark : _C.border)),
-      child: Row(children: labels.asMap().entries.map((e) {
-        final sel = selected == e.key;
-        return Expanded(child: GestureDetector(
-          onTap: () => onSelect(e.key),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.symmetric(vertical: 9),
-            decoration: BoxDecoration(
-                color: sel ? _C.purple : Colors.transparent,
-                borderRadius: BorderRadius.circular(10)),
-            child: Center(child: Text(e.value, style: TextStyle(
-                color: sel ? Colors.white
-                    : (isDark ? AppColors.textMidDark : _C.t2),
-                fontSize: 12, fontWeight: sel ? FontWeight.w700 : FontWeight.w500))),
-          ),
-        ));
-      }).toList()),
-    );
-  }
-}
-
-class _EarnSummary extends StatelessWidget {
-  final String uid;
-  final DateTime start;
-  final int period;
-  final bool isDark, isHindi;
-  const _EarnSummary({
-    required this.uid, required this.start, required this.period,
-    required this.isDark, required this.isHindi,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (uid.isEmpty) return const SizedBox.shrink();
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('bookings')
-          .where('helperId', isEqualTo: uid)
-          .where('status', isEqualTo: 'completed')
-          .where('createdAt', isGreaterThanOrEqualTo: start)
-          .snapshots(),
-      builder: (ctx, snap) {
-        double total = 0; int jobs = 0;
-        final Map<int, double> byDay = {}; // day index → amount
-
-        if (snap.hasData) {
-          for (final d in snap.data!.docs) {
-            final m   = d.data() as Map<String, dynamic>;
-            final amt = ((m['amount'] ?? 0) as num).toDouble();
-            final ts  = (m['createdAt'] as Timestamp?)?.toDate();
-            total += amt; jobs++;
-            if (ts != null) {
-              final key = period == 2
-                  ? ts.day
-                  : (period == 1 ? ts.weekday : ts.hour);
-              byDay[key] = (byDay[key] ?? 0) + amt;
-            }
-          }
-        }
-        final maxBar = byDay.isEmpty ? 1.0 : byDay.values.reduce(math.max);
-
-        return Container(
-          decoration: BoxDecoration(
-              color: isDark ? AppColors.cardDark : _C.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                  color: isDark ? AppColors.borderDark : _C.border),
-              boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? 0.10 : 0.04),
-                  blurRadius: 12, offset: const Offset(0, 3))]),
-          child: Column(children: [
-            // total
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
-              child: Row(children: [
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(isHindi ? 'कुल कमाई' : 'Total Earned', style: TextStyle(
-                      color: isDark ? AppColors.textMidDark : _C.t2,
-                      fontSize: 11, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  Text('₹ ${total.toStringAsFixed(2)}', style: TextStyle(
-                      color: isDark ? Colors.white : _C.t1,
-                      fontSize: 30, fontWeight: FontWeight.w800)),
-                ]),
-                const Spacer(),
-                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                  _Chip(label: '$jobs jobs', bg: _C.green.withOpacity(0.10),
-                      fg: _C.green),
-                ]),
-              ]),
-            ),
-            // mini bar chart
-            if (byDay.isNotEmpty) Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
-              child: _MiniBarChart(
-                  data: byDay, maxVal: maxBar, isDark: isDark, period: period),
-            ),
-          ]),
-        );
-      },
-    );
-  }
-}
-
-// ── mini bar chart (pure Flutter, no library needed) ─────────────
-class _MiniBarChart extends StatelessWidget {
-  final Map<int, double> data;
-  final double maxVal;
-  final bool isDark;
-  final int period;
-  const _MiniBarChart({
-    required this.data, required this.maxVal,
-    required this.isDark, required this.period,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Build 7 buckets for week, 12h for day, 30 for month
-    final int buckets = period == 0 ? 12 : (period == 1 ? 7 : 30);
-    final labels = period == 1
-        ? ['M', 'T', 'W', 'T', 'F', 'S', 'S']
-        : null;
-
-    return SizedBox(height: 90, child: Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(buckets, (i) {
-        final key = period == 0 ? (i * 2) : (i + 1);
-        final val = data[key] ?? 0;
-        final pct = maxVal > 0 ? (val / maxVal).clamp(0.0, 1.0) : 0.0;
-        final isToday = (period == 1
-            ? (key == DateTime.now().weekday)
-            : (period == 2
-            ? (key == DateTime.now().day)
-            : false));
-
-        return Expanded(child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2),
-          child: Column(
-              mainAxisAlignment: MainAxisAlignment.end, children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 600),
-              height: 60 * pct + (val > 0 ? 4 : 2),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(4),
-                color: pct > 0
-                    ? (isToday ? _C.purple : _C.purple.withOpacity(0.4))
-                    : (isDark ? AppColors.borderDark : _C.border),
-              ),
-            ),
-            if (labels != null && i < labels.length) ...[
-              const SizedBox(height: 4),
-              Text(labels[i], style: TextStyle(
-                  color: isDark ? AppColors.textSoftDark : _C.t3,
-                  fontSize: 9)),
-            ],
-          ]),
-        ));
-      }),
-    ));
-  }
-}
-
-class _WithdrawBtn extends StatelessWidget {
-  final bool isDark, isHindi;
-  const _WithdrawBtn({required this.isDark, required this.isHindi});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _C.purple.withOpacity(0.3))),
-    child: ElevatedButton.icon(
-      onPressed: () {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Withdrawal coming soon!'),
-          behavior: SnackBarBehavior.floating,
-        ));
-      },
-      icon: const Icon(Icons.account_balance_wallet_rounded, size: 18),
-      label: Text(isHindi ? 'निकासी करें' : 'Withdraw Earnings',
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isDark ? AppColors.cardDark : _C.white,
-        foregroundColor: _C.purple,
-        elevation: 0, padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-    ),
-  );
-}
-
-class _TransactionList extends StatelessWidget {
-  final String uid;
-  final DateTime start;
-  final bool isDark;
-  const _TransactionList(
-      {required this.uid, required this.start, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    if (uid.isEmpty) return const SizedBox.shrink();
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('bookings')
-          .where('helperId', isEqualTo: uid)
-          .where('status', isEqualTo: 'completed')
-          .where('createdAt', isGreaterThanOrEqualTo: start)
-          .orderBy('createdAt', descending: true)
-          .limit(20).snapshots(),
-      builder: (ctx, snap) {
-        if (!snap.hasData || snap.data!.docs.isEmpty) {
-          return Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-                color: isDark ? AppColors.cardDark : _C.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                    color: isDark ? AppColors.borderDark : _C.border)),
-            child: Center(child: Text('No transactions found',
-                style: TextStyle(
-                    color: isDark ? AppColors.textMidDark : _C.t2,
-                    fontSize: 13))),
-          );
-        }
-        return Container(
-          decoration: BoxDecoration(
-              color: isDark ? AppColors.cardDark : _C.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                  color: isDark ? AppColors.borderDark : _C.border),
-              boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? 0.10 : 0.03),
-                  blurRadius: 8, offset: const Offset(0, 2))]),
-          child: Column(children: snap.data!.docs.asMap().entries.map((e) {
-            final d   = e.value.data() as Map<String, dynamic>;
-            final svc = d['serviceName'] as String? ?? 'Service';
-            final amt = ((d['amount'] ?? 0) as num).toDouble();
-            final ts  = (d['createdAt'] as Timestamp?)?.toDate();
-            final last = e.key == snap.data!.docs.length - 1;
-            return Column(children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                child: Row(children: [
-                  Container(width: 36, height: 36,
-                      decoration: BoxDecoration(
-                          color: _C.green.withOpacity(0.10),
-                          borderRadius: BorderRadius.circular(10)),
-                      child: const Icon(Icons.check_circle_rounded,
-                          color: _C.green, size: 17)),
-                  const SizedBox(width: 12),
-                  Expanded(child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(svc, style: TextStyle(
-                        color: isDark ? Colors.white : _C.t1,
-                        fontSize: 13, fontWeight: FontWeight.w600)),
-                    if (ts != null) Text(
-                        '${ts.day}/${ts.month}/${ts.year}  ${ts.hour}:${ts.minute.toString().padLeft(2, '0')}',
-                        style: TextStyle(
-                            color: isDark ? AppColors.textSoftDark : _C.t3,
-                            fontSize: 10)),
-                  ])),
-                  Text('+₹${amt.toStringAsFixed(0)}', style: const TextStyle(
-                      color: _C.green, fontSize: 14, fontWeight: FontWeight.w700)),
-                ]),
-              ),
-              if (!last) Divider(height: 1,
-                  color: isDark ? AppColors.borderDark : _C.divider,
-                  indent: 14, endIndent: 14),
-            ]);
-          }).toList()),
-        );
-      },
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ME TAB — profile, UPI, language, support, logout
-// ═══════════════════════════════════════════════════════════════════════════
-class _MeTab extends StatelessWidget {
-  const _MeTab();
-  @override
-  Widget build(BuildContext context) {
-    final helper  = context.watch<AuthProvider>().helper;
-    final isDark  = Theme.of(context).brightness == Brightness.dark;
-    final lang    = context.watch<LanguageProvider>();
-    final isHindi = lang.isHindi;
-
-    return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : _C.bg,
-      body: CustomScrollView(slivers: [
-        SliverToBoxAdapter(child: _MeHeader(helper: helper, isDark: isDark)),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-          sliver: SliverList(delegate: SliverChildListDelegate([
-            // Profile card
-            _MeProfileCard(helper: helper, isDark: isDark, isHindi: isHindi),
-            const SizedBox(height: 16),
-            // UPI
-            _MeUpiCard(helper: helper, isDark: isDark, isHindi: isHindi),
-            const SizedBox(height: 16),
-            // Settings
-            _MeSection(isDark: isDark, title: isHindi ? 'सेटिंग' : 'Settings',
-              items: [
-                _MeItem(icon: Icons.language_rounded,
-                    label: isHindi ? 'भाषा: हिंदी' : 'Language: English',
-                    isDark: isDark,
-                    onTap: () => lang.setLanguage(lang.isHindi ? 'en' : 'hi')),
-                _MeItem(icon: Icons.dark_mode_rounded,
-                    label: isDark
-                        ? (isHindi ? 'लाइट मोड' : 'Switch to Light Mode')
-                        : (isHindi ? 'डार्क मोड' : 'Switch to Dark Mode'),
-                    isDark: isDark,
-                    onTap: () {
-                      // Toggle via ThemeNotifier if wired
-                    }),
-              ],
-            ),
-            const SizedBox(height: 14),
-            _MeSection(isDark: isDark, title: isHindi ? 'सहायता' : 'Help',
-              items: [
-                _MeItem(icon: Icons.headset_mic_rounded,
-                    label: isHindi ? 'सपोर्ट से बात करें' : 'Contact Support',
-                    isDark: isDark,
-                    onTap: () => Navigator.push(context,
-                        SmoothRoute(page: const SupportScreen()))),
-                _MeItem(icon: Icons.history_rounded,
-                    label: isHindi ? 'जॉब इतिहास' : 'Job History',
-                    isDark: isDark,
-                    onTap: () => Navigator.push(context,
-                        SmoothRoute(page: const JobHistoryScreen()))),
-              ],
-            ),
-            const SizedBox(height: 22),
-            // Logout
-            SizedBox(width: double.infinity, child: OutlinedButton.icon(
-              onPressed: () => context.read<AuthProvider>().logout(),
-              icon: const Icon(Icons.logout_rounded, color: _C.red),
-              label: Text(isHindi ? 'लॉगआउट' : 'Logout',
-                  style: const TextStyle(
-                      color: _C.red, fontSize: 14, fontWeight: FontWeight.w700)),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                side: BorderSide(color: _C.red.withOpacity(0.4)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-            )),
-          ])),
-        ),
-      ]),
-    );
-  }
-}
-
-class _MeHeader extends StatelessWidget {
-  final HelperModel? helper; final bool isDark;
-  const _MeHeader({required this.helper, required this.isDark});
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: EdgeInsets.only(
-      top: MediaQuery.of(context).padding.top + 16,
-      bottom: 18, left: 16, right: 16,
-    ),
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft, end: Alignment.bottomRight,
-        colors: [_C.indigo, _C.violet, _C.purple],
-      ),
-    ),
-    child: Row(children: [
-      Container(width: 38, height: 38,
-          decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12)),
-          child: const Icon(Icons.person_rounded, color: Colors.white, size: 20)),
-      const SizedBox(width: 12),
-      Text('My Profile', style: const TextStyle(
-          color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
-      const Spacer(),
-      const NotificationBell(isDark: false),
-    ]),
-  );
-}
-
-class _MeProfileCard extends StatelessWidget {
-  final HelperModel? helper; final bool isDark, isHindi;
-  const _MeProfileCard(
-      {required this.helper, required this.isDark, required this.isHindi});
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(18),
-    decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: isDark ? AppColors.borderDark : _C.border),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.10 : 0.04),
-            blurRadius: 10, offset: const Offset(0, 2))]),
-    child: Row(children: [
-      Container(
-        width: 60, height: 60,
-        decoration: BoxDecoration(
-            gradient: const LinearGradient(
-                colors: [_C.indigo, _C.purple]),
-            shape: BoxShape.circle),
-        child: Center(child: Text(helper?.initials ?? 'SK',
-            style: const TextStyle(color: Colors.white,
-                fontSize: 20, fontWeight: FontWeight.w800))),
-      ),
-      const SizedBox(width: 16),
-      Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(helper?.name ?? 'Helper', style: TextStyle(
-            color: isDark ? Colors.white : _C.t1,
-            fontSize: 18, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 3),
-        Text(helper?.phone ?? '', style: TextStyle(
-            color: isDark ? AppColors.textMidDark : _C.t2, fontSize: 13)),
-        const SizedBox(height: 6),
-        _Chip(label: helper?.displayId ?? 'SK-0000',
-            bg: _C.purple.withOpacity(0.08), fg: _C.purple),
-      ])),
-    ]),
-  );
-}
-
-class _MeUpiCard extends StatelessWidget {
-  final HelperModel? helper; final bool isDark, isHindi;
-  const _MeUpiCard(
-      {required this.helper, required this.isDark, required this.isHindi});
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isDark ? AppColors.borderDark : _C.border)),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        const Icon(Icons.account_balance_wallet_rounded,
-            color: _C.purple, size: 18),
-        const SizedBox(width: 8),
-        Text(isHindi ? 'UPI / बैंक विवरण' : 'UPI / Bank Details',
-            style: TextStyle(
-                color: isDark ? Colors.white : _C.t1,
-                fontSize: 14, fontWeight: FontWeight.w700)),
-        const Spacer(),
-        GestureDetector(
-          onTap: () {},
-          child: Text(isHindi ? 'बदलें' : 'Edit', style: const TextStyle(
-              color: _C.purple, fontSize: 12, fontWeight: FontWeight.w600)),
-        ),
-      ]),
-      const SizedBox(height: 12),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-            color: _C.purple.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _C.purple.withOpacity(0.15))),
-        child: Row(children: [
-          const Icon(Icons.smartphone_rounded, color: _C.purple, size: 14),
-          const SizedBox(width: 8),
-          Text(
-            (helper?.toMap()['upiId'] as String?) ?? 'Not set',
-            style: TextStyle(
-                color: isDark ? AppColors.textMidDark : _C.t2,
-                fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-        ]),
-      ),
-    ]),
-  );
-}
-
-class _MeSection extends StatelessWidget {
-  final bool isDark;
-  final String title;
-  final List<_MeItem> items;
-  const _MeSection(
-      {required this.isDark, required this.title, required this.items});
-  @override
-  Widget build(BuildContext context) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(title.toUpperCase(), style: TextStyle(
-        color: isDark ? AppColors.textSoftDark : _C.t3,
-        fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-    const SizedBox(height: 8),
-    Container(
-      decoration: BoxDecoration(
-          color: isDark ? AppColors.cardDark : _C.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: isDark ? AppColors.borderDark : _C.border)),
-      child: Column(children: items.asMap().entries.map((e) {
-        final item = e.value;
-        final last = e.key == items.length - 1;
-        return Column(children: [
-          GestureDetector(
-            onTap: item.onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              child: Row(children: [
-                Icon(item.icon, color: _C.purple, size: 20),
-                const SizedBox(width: 12),
-                Expanded(child: Text(item.label, style: TextStyle(
-                    color: isDark ? Colors.white : _C.t1,
-                    fontSize: 13, fontWeight: FontWeight.w500))),
-                Icon(Icons.arrow_forward_ios_rounded, size: 11,
-                    color: isDark ? AppColors.textSoftDark : _C.t3),
-              ]),
-            ),
-          ),
-          if (!last) Divider(height: 1,
-              color: isDark ? AppColors.borderDark : _C.divider,
-              indent: 14, endIndent: 14),
-        ]);
-      }).toList()),
-    ),
-  ]);
-}
-
-class _MeItem {
-  final IconData icon;
-  final String label;
-  final bool isDark;
-  final VoidCallback? onTap;
-  const _MeItem({
-    required this.icon, required this.label,
-    required this.isDark, this.onTap,
-  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2359,28 +1599,29 @@ class _MeItem {
 class _SecHead extends StatelessWidget {
   final String title;
   final String? badge;
-  final bool isDark;
-  const _SecHead({required this.title, required this.isDark, this.badge});
+  const _SecHead({required this.title, this.badge});
 
   @override
   Widget build(BuildContext context) => Row(children: [
     Container(width: 4, height: 18,
         decoration: BoxDecoration(
-            color: _C.purple, borderRadius: BorderRadius.circular(4))),
+            color: _P.purple, borderRadius: BorderRadius.circular(4))),
     const SizedBox(width: 10),
-    Text(title, style: TextStyle(
-        color: isDark ? Colors.white : _C.t1,
-        fontSize: 17, fontWeight: FontWeight.w800)),
+    Text(title,
+        style: const TextStyle(
+            color: _P.t1, fontSize: 17, fontWeight: FontWeight.w800)),
     if (badge != null) ...[
       const Spacer(),
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-            color: _C.purple.withOpacity(0.08),
+            color: _P.purple.withOpacity(0.08),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _C.purple.withOpacity(0.18))),
-        child: Text(badge!, style: const TextStyle(
-            color: _C.purple, fontSize: 11, fontWeight: FontWeight.w700)),
+            border: Border.all(color: _P.purple.withOpacity(0.18))),
+        child: Text(badge!,
+            style: const TextStyle(
+                color: _P.purple, fontSize: 11,
+                fontWeight: FontWeight.w700)),
       ),
     ],
   ]);
@@ -2390,39 +1631,131 @@ class _Chip extends StatelessWidget {
   final String label;
   final Color bg, fg;
   const _Chip({required this.label, required this.bg, required this.fg});
+
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
     decoration: BoxDecoration(
         color: bg, borderRadius: BorderRadius.circular(20)),
-    child: Text(label, style: TextStyle(
-        color: fg, fontSize: 10, fontWeight: FontWeight.w700)),
+    child: Text(label,
+        style: TextStyle(
+            color: fg, fontSize: 10, fontWeight: FontWeight.w700)),
   );
 }
 
+// ─── Online toggle button — locked until profile complete + KYC approved ────
+// ─── Online toggle button — locked until profile complete + KYC approved ────
+class _OnlineToggleBtn extends StatelessWidget {
+  final HelperModel? helper;
+  final bool isHindi, isOnline;
+  const _OnlineToggleBtn(
+      {required this.helper, required this.isHindi, required this.isOnline});
+
+  bool _canGoOnline(Map<String, dynamic> d) {
+    // ✅ FIX: Check BOTH status=='approved' OR kycStatus=='approved'
+    final kycApproved = helper?.isApproved ?? false;
+    if (!kycApproved) return false;
+    final checks = [
+      (helper?.name ?? '').isNotEmpty,
+      (helper?.phone ?? '').isNotEmpty,
+      (helper?.area ?? '').isNotEmpty,
+      (helper?.services ?? []).isNotEmpty,
+      (d['serviceType'] as String? ?? '').isNotEmpty,
+      (d['description'] as String? ?? '').isNotEmpty,
+      (d['experience']  as String? ?? '').isNotEmpty,
+      ((d['pricePerVisit'] ?? 0) as num) > 0,
+      (d['skills'] as List? ?? []).isNotEmpty,
+    ];
+    return checks.every((b) => b);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = helper?.uid ?? '';
+    if (uid.isEmpty) return _lockedChip(context, isHindi);
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('helpers').doc(uid).snapshots(),
+      builder: (ctx, snap) {
+        final d = snap.data?.data() as Map<String, dynamic>? ?? {};
+        final canToggle = _canGoOnline(d);
+        if (!canToggle) return _lockedChip(context, isHindi);
+        return GestureDetector(
+          onTap: () {
+            HapticFeedback.mediumImpact();
+            context.read<AuthProvider>().toggleOnlineStatus();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+                color: isOnline ? AppColors.onlineGreen : _P.purple,
+                borderRadius: BorderRadius.circular(22)),
+            child: Text(
+              isOnline
+                  ? (isHindi ? 'ऑनलाइन' : 'ACTIVE')
+                  : (isHindi ? 'लाइव जाएं' : 'GO LIVE'),
+              style: const TextStyle(color: Colors.white,
+                  fontSize: 11, fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _lockedChip(BuildContext context, bool hi) {
+    return GestureDetector(
+      onTap: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(hi
+            ? 'प्रोफ़ाइल 100% पूरी करें और KYC अनुमोदित कराएं'
+            : 'Complete 100% profile & get KYC approved to go online'),
+        backgroundColor: _P.amber,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 3),
+      )),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: _P.amber.withOpacity(0.4))),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.lock_rounded, color: _P.amber, size: 12),
+          const SizedBox(width: 5),
+          Text(hi ? 'लॉक्ड' : 'LOCKED',
+              style: const TextStyle(
+                  color: _P.amber, fontSize: 11,
+                  fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+        ]),
+      ),
+    );
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// KYC STATUS SCREENS
+// KYC STATUS SCREENS (unchanged logic, light-theme only)
 // ═══════════════════════════════════════════════════════════════════════════
 class _KycPending extends StatelessWidget {
   final HelperModel helper;
   const _KycPending({required this.helper});
   @override
-  Widget build(BuildContext context) {
-    final dk = Theme.of(context).brightness == Brightness.dark;
-    return _KycShell(helper: helper, isDark: dk,
-        color: AppColors.warning, label: 'Action Required',
-        icon: Icons.upload_file_rounded,
-        title: 'Complete Your KYC',
-        body: 'Upload your Aadhaar & PAN to get verified.',
-        steps: const [
-          ('Registration Complete', true), ('Upload Aadhaar & PAN', false),
-          ('Admin Approval', false), ('Go Live & Earn', false),
-        ],
-        action: _KycActionBtn(label: 'Upload KYC Documents',
-            icon: Icons.upload_rounded,
-            onTap: () => Navigator.push(context,
-                SmoothRoute(page: const KycScreen()))));
-  }
+  Widget build(BuildContext context) => _KycShell(
+      helper: helper, color: AppColors.warning, label: 'Action Required',
+      icon: Icons.upload_file_rounded,
+      title: 'Complete Your KYC',
+      body: 'Upload your Aadhaar & PAN to get verified.',
+      steps: const [
+        ('Registration Complete', true), ('Upload Aadhaar & PAN', false),
+        ('Admin Approval', false), ('Go Live & Earn', false),
+      ],
+      action: _KycBtn(label: 'Upload KYC Documents',
+          icon: Icons.upload_rounded,
+          onTap: (ctx) => Navigator.push(
+              ctx, SmoothRoute(page: const KycScreen()))));
 }
 
 class _KycUnderReview extends StatefulWidget {
@@ -2431,6 +1764,7 @@ class _KycUnderReview extends StatefulWidget {
   @override
   State<_KycUnderReview> createState() => _KycUnderReviewState();
 }
+
 class _KycUnderReviewState extends State<_KycUnderReview> {
   Timer? _t;
   @override
@@ -2443,73 +1777,68 @@ class _KycUnderReviewState extends State<_KycUnderReview> {
   @override
   void dispose() { _t?.cancel(); super.dispose(); }
   @override
-  Widget build(BuildContext context) {
-    final dk = Theme.of(context).brightness == Brightness.dark;
-    return _KycShell(helper: widget.helper, isDark: dk,
-        color: _C.purple, label: 'Under Review',
-        icon: Icons.manage_search_rounded,
-        title: 'Documents Under Review',
-        body: 'KYC submitted. Admin will review within 24 hours.',
-        steps: const [
-          ('Registration Complete', true), ('KYC Documents Uploaded', true),
-          ('Admin Approval', false), ('Go Live & Earn', false),
-        ],
-        action: _KycActionBtn(label: 'Check Status',
-            icon: Icons.refresh_rounded, outline: true,
-            onTap: () => context.read<AuthProvider>().refreshProfile()));
-  }
+  Widget build(BuildContext context) => _KycShell(
+      helper: widget.helper, color: _P.purple, label: 'Under Review',
+      icon: Icons.manage_search_rounded,
+      title: 'Documents Under Review',
+      body: 'KYC submitted. Admin will review within 24 hours.',
+      steps: const [
+        ('Registration Complete', true), ('KYC Documents Uploaded', true),
+        ('Admin Approval', false), ('Go Live & Earn', false),
+      ],
+      action: _KycBtn(
+          label: 'Check Status', icon: Icons.refresh_rounded, outline: true,
+          onTap: (ctx) => ctx.read<AuthProvider>().refreshProfile()));
 }
 
 class _KycRejected extends StatelessWidget {
   final HelperModel helper;
   const _KycRejected({required this.helper});
   @override
-  Widget build(BuildContext context) {
-    final dk = Theme.of(context).brightness == Brightness.dark;
-    return _KycShell(helper: helper, isDark: dk,
-        color: AppColors.danger, label: 'KYC Rejected',
-        icon: Icons.cancel_rounded,
-        title: 'KYC Rejected',
-        body: helper.kycRejectedReason ?? 'Please re-upload clear, valid documents.',
-        steps: const [],
-        action: _KycActionBtn(label: 'Re-upload Documents',
-            icon: Icons.upload_rounded, color: AppColors.danger,
-            onTap: () => Navigator.push(context,
-                SmoothRoute(page: const KycScreen()))));
-  }
+  Widget build(BuildContext context) => _KycShell(
+      helper: helper, color: AppColors.danger, label: 'KYC Rejected',
+      icon: Icons.cancel_rounded,
+      title: 'KYC Rejected',
+      body: helper.kycRejectedReason ??
+          'Please re-upload clear, valid documents.',
+      steps: const [],
+      action: _KycBtn(
+          label: 'Re-upload Documents', icon: Icons.upload_rounded,
+          color: AppColors.danger,
+          onTap: (ctx) => Navigator.push(
+              ctx, SmoothRoute(page: const KycScreen()))));
 }
 
 class _KycInactive extends StatelessWidget {
   final HelperModel helper;
   const _KycInactive({required this.helper});
   @override
-  Widget build(BuildContext context) {
-    final dk = Theme.of(context).brightness == Brightness.dark;
-    return _KycShell(helper: helper, isDark: dk,
-        color: _C.t2, label: 'Deactivated',
-        icon: Icons.block_rounded,
-        title: 'Account Deactivated',
-        body: 'Contact support to reactivate your account.',
-        steps: const [], action: null);
-  }
+  Widget build(BuildContext context) => _KycShell(
+      helper: helper, color: _P.t2, label: 'Deactivated',
+      icon: Icons.block_rounded,
+      title: 'Account Deactivated',
+      body: 'Contact support to reactivate your account.',
+      steps: const [],
+      action: null);
 }
 
+// ── KYC shell ─────────────────────────────────────────────────────────────
 class _KycShell extends StatelessWidget {
   final HelperModel helper;
-  final bool isDark;
   final Color color;
   final String label, title, body;
   final IconData icon;
   final List<(String, bool)> steps;
   final Widget? action;
   const _KycShell({
-    required this.helper, required this.isDark, required this.color,
+    required this.helper, required this.color,
     required this.label, required this.title, required this.body,
     required this.icon, required this.steps, required this.action,
   });
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: isDark ? AppColors.bgDark : _C.bg,
+    backgroundColor: _P.bg,
     body: SafeArea(child: Padding(padding: const EdgeInsets.all(24),
       child: Column(children: [
         // top bar
@@ -2517,101 +1846,114 @@ class _KycShell extends StatelessWidget {
           Container(width: 44, height: 44,
               decoration: BoxDecoration(
                   color: color.withOpacity(0.12), shape: BoxShape.circle),
-              child: Center(child: Text(helper.initials, style: TextStyle(
-                  color: color, fontSize: 15, fontWeight: FontWeight.w700)))),
+              child: Center(child: Text(helper.initials,
+                  style: TextStyle(
+                      color: color, fontSize: 15,
+                      fontWeight: FontWeight.w700)))),
           const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(helper.name, style: TextStyle(
-                    color: isDark ? Colors.white : _C.t1,
-                    fontSize: 15, fontWeight: FontWeight.w700)),
-                Container(margin: const EdgeInsets.only(top: 4),
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                        color: color.withOpacity(0.10),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: color.withOpacity(0.3))),
-                    child: Text(label, style: TextStyle(
-                        color: color, fontSize: 11, fontWeight: FontWeight.w700))),
-              ])),
+          Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(helper.name,
+                style: const TextStyle(
+                    color: _P.t1, fontSize: 15, fontWeight: FontWeight.w700)),
+            Container(
+                margin: const EdgeInsets.only(top: 4),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                    color: color.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: color.withOpacity(0.3))),
+                child: Text(label,
+                    style: TextStyle(
+                        color: color, fontSize: 11,
+                        fontWeight: FontWeight.w700))),
+          ])),
         ]),
         const Spacer(),
         Container(width: 100, height: 100,
             decoration: BoxDecoration(
                 color: color.withOpacity(0.08), shape: BoxShape.circle,
-                border: Border.all(color: color.withOpacity(0.3), width: 2)),
+                border: Border.all(
+                    color: color.withOpacity(0.3), width: 2)),
             child: Icon(icon, size: 48, color: color)),
         const SizedBox(height: 24),
-        Text(title, style: TextStyle(
-            color: isDark ? Colors.white : _C.t1,
-            fontSize: 22, fontWeight: FontWeight.w800)),
+        Text(title,
+            style: const TextStyle(
+                color: _P.t1, fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 12),
         Text(body, textAlign: TextAlign.center,
-            style: TextStyle(
-                color: isDark ? AppColors.textMidDark : _C.t2,
-                fontSize: 14, height: 1.6)),
+            style: const TextStyle(
+                color: _P.t2, fontSize: 14, height: 1.6)),
         if (steps.isNotEmpty) ...[
           const SizedBox(height: 28),
-          _KycSteps(isDark: isDark, steps: steps),
+          _KycSteps(steps: steps),
         ],
         const Spacer(),
         if (action != null) action!,
         const SizedBox(height: 12),
-        // logout
         TextButton.icon(
           onPressed: () => context.read<AuthProvider>().logout(),
-          icon: const Icon(Icons.logout_rounded, size: 16, color: _C.red),
+          icon: const Icon(Icons.logout_rounded, size: 16, color: _P.red),
           label: const Text('Logout',
-              style: TextStyle(color: _C.red, fontSize: 13)),
+              style: TextStyle(color: _P.red, fontSize: 13)),
         ),
       ]),
     )),
   );
 }
 
-class _KycActionBtn extends StatelessWidget {
-  final String label; final IconData icon;
-  final VoidCallback onTap;
-  final Color? color; final bool outline;
-  const _KycActionBtn({
+class _KycBtn extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final void Function(BuildContext) onTap;
+  final Color? color;
+  final bool outline;
+  const _KycBtn({
     required this.label, required this.icon, required this.onTap,
     this.color, this.outline = false,
   });
+
   @override
   Widget build(BuildContext context) => SizedBox(
     width: double.infinity,
     child: outline
         ? OutlinedButton.icon(
-        onPressed: onTap, icon: Icon(icon), label: Text(label),
+        onPressed: () => onTap(context),
+        icon: Icon(icon), label: Text(label),
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(double.infinity, 50),
-          foregroundColor: _C.purple, side: const BorderSide(color: _C.purple),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          foregroundColor: _P.purple,
+          side: const BorderSide(color: _P.purple),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14)),
         ))
         : ElevatedButton.icon(
-        onPressed: onTap, icon: Icon(icon),
-        label: Text(label, style: const TextStyle(
-            fontSize: 15, fontWeight: FontWeight.w700)),
+        onPressed: () => onTap(context),
+        icon: Icon(icon),
+        label: Text(label,
+            style: const TextStyle(
+                fontSize: 15, fontWeight: FontWeight.w700)),
         style: ElevatedButton.styleFrom(
           backgroundColor: color,
           padding: const EdgeInsets.symmetric(vertical: 15),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14)),
         )),
   );
 }
 
 class _KycSteps extends StatelessWidget {
-  final bool isDark;
   final List<(String, bool)> steps;
-  const _KycSteps({required this.isDark, required this.steps});
+  const _KycSteps({required this.steps});
+
   @override
   Widget build(BuildContext context) => Container(
     width: double.infinity, padding: const EdgeInsets.all(18),
     decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : _C.white,
+        color: _P.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: isDark ? AppColors.borderDark : _C.border)),
+        border: Border.all(color: _P.border)),
     child: Column(children: steps.asMap().entries.map((e) {
       final (lbl, done) = e.value;
       final last = e.key == steps.length - 1;
@@ -2621,28 +1963,28 @@ class _KycSteps extends StatelessWidget {
               duration: const Duration(milliseconds: 280),
               width: 22, height: 22,
               decoration: BoxDecoration(
-                  color: done ? _C.green : Colors.transparent,
+                  color: done ? _P.green : Colors.transparent,
                   shape: BoxShape.circle,
                   border: Border.all(
-                      color: done ? _C.green
-                          : (isDark ? AppColors.borderDark : _C.border),
-                      width: 2)),
+                      color: done ? _P.green : _P.border, width: 2)),
               child: Center(child: done
-                  ? const Icon(Icons.check_rounded, size: 13, color: Colors.white)
-                  : Container(width: 6, height: 6, decoration: BoxDecoration(
-                  color: isDark ? AppColors.borderDark : _C.border,
-                  shape: BoxShape.circle)))),
-          if (!last) Container(width: 2, height: 26,
-              color: done ? _C.green.withOpacity(0.3)
-                  : (isDark ? AppColors.borderDark : _C.border)),
+                  ? const Icon(Icons.check_rounded, size: 13,
+                  color: Colors.white)
+                  : Container(width: 6, height: 6,
+                  decoration: const BoxDecoration(
+                      color: _P.border, shape: BoxShape.circle)))),
+          if (!last)
+            Container(width: 2, height: 26,
+                color: done ? _P.green.withOpacity(0.3) : _P.border),
         ]),
         const SizedBox(width: 12),
         Padding(padding: const EdgeInsets.only(top: 3),
-            child: Text(lbl, style: TextStyle(
-                color: done ? _C.green
-                    : (isDark ? AppColors.textMidDark : _C.t2),
-                fontSize: 13,
-                fontWeight: done ? FontWeight.w600 : FontWeight.w400))),
+            child: Text(lbl,
+                style: TextStyle(
+                    color: done ? _P.green : _P.t2, fontSize: 13,
+                    fontWeight: done
+                        ? FontWeight.w600
+                        : FontWeight.w400))),
       ]);
     }).toList()),
   );

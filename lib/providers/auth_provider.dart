@@ -1,11 +1,13 @@
-// lib/providers/auth_provider.dart
-// Requires in pubspec.yaml:
-//   google_sign_in: ^6.2.1
-//   firebase_auth: ^4.x
-//   cloud_firestore: ^4.x
+// lib/providers/auth_provider.dart  ← FULLY FIXED VERSION
+// ─────────────────────────────────────────────────────────────────────────────
+// CHANGES FROM ORIGINAL (all marked with ← FIX):
 //
-// Also add in android/app/build.gradle: apply plugin: 'com.google.gms.google-services'
-// And place google-services.json in android/app/
+//  1. register()       — added phoneNumber, location, serviceType, kycStatus fields
+//  2. loginWithGoogle()— added phoneNumber, location, serviceType, kycStatus fields
+//  3. submitKyc()      — renamed kycData→kycDocuments, status→kycStatus:'pending',
+//                        kycDone stays false until approved, added kycSubmittedAt
+//  4. skipKyc()        — added kycStatus:'not_submitted'
+// ─────────────────────────────────────────────────────────────────────────────
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
@@ -135,7 +137,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // LOGIN — supports: email address  OR  username (looked up in Firestore)
+  // LOGIN
   // ─────────────────────────────────────────────────────────────
   Future<bool> login({required String identifier, required String password}) async {
     _isLoading    = true;
@@ -145,16 +147,12 @@ class AuthProvider extends ChangeNotifier {
     try {
       String emailToUse = identifier.trim();
 
-      // ── Username lookup ───────────────────────────────────────
       if (!emailToUse.contains('@')) {
         final q = await _db
             .collection('helpers')
             .where('username', isEqualTo: emailToUse.toLowerCase())
             .limit(1)
             .get();
-
-        // Fallback: try matching by name (case-insensitive not natively supported;
-        // username field is the correct approach)
         if (q.docs.isEmpty) {
           _errorMessage = 'No account found for "$emailToUse". Try using your email.';
           _isLoading    = false;
@@ -170,7 +168,6 @@ class AuthProvider extends ChangeNotifier {
         }
       }
 
-      // ── Firebase Auth ─────────────────────────────────────────
       final cred = await _auth.signInWithEmailAndPassword(
           email: emailToUse, password: password.trim());
       await _fetchHelper(cred.user!.uid);
@@ -201,12 +198,10 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Trigger the Google picker
       final googleUser = await _google.signIn();
       if (googleUser == null) {
-        // User cancelled
         _isLoading    = false;
-        _errorMessage = null; // no error — intentional cancel
+        _errorMessage = null;
         notifyListeners();
         return false;
       }
@@ -220,22 +215,24 @@ class AuthProvider extends ChangeNotifier {
       final cred = await _auth.signInWithCredential(credential);
       final uid  = cred.user!.uid;
 
-      // ── Upsert helper doc ─────────────────────────────────────
       final doc = await _db.collection('helpers').doc(uid).get();
       if (!doc.exists) {
-        // First time Google sign-in → create pending helper profile
         final data = {
           'uid':             uid,
           'name':            cred.user!.displayName ?? 'Sarthi Helper',
-          'email':           cred.user!.email ?? '',
           'phone':           '',
-          'services':        <String>[],
+          'phoneNumber':     '',
+          'email':           cred.user!.email ?? '',
           'area':            '',
+          'location':        '',
+          'services':        <String>[],
+          'serviceType':     '',
           'status':          'pending',
           'rating':          0.0,
           'totalJobs':       0,
           'kycDone':         false,
           'kycSkipped':      false,
+          'kycStatus':       'not_submitted',
           'isOnline':        false,
           'photoUrl':        cred.user!.photoURL ?? '',
           'totalBalance':    0.0,
@@ -247,11 +244,12 @@ class AuthProvider extends ChangeNotifier {
           'updatedAt':       FieldValue.serverTimestamp(),
         };
         await _db.collection('helpers').doc(uid).set(data);
-        _helper = HelperModel.fromMap(data, uid);
-      } else {
-        _helper = HelperModel.fromMap(doc.data()!, uid);
       }
 
+      // ✅ FIX: Always call _fetchHelper to start the real-time stream.
+      // Previously existing users skipped this, leaving _helper without
+      // a live stream — so isLoggedIn stayed false after Google login.
+      await _fetchHelper(uid);
       _subscribeNotifications(uid);
       _isLoading = false;
       notifyListeners();
@@ -287,14 +285,12 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Check email duplicate
       final eqry = await _db.collection('helpers')
           .where('email', isEqualTo: email.trim().toLowerCase()).limit(1).get();
       if (eqry.docs.isNotEmpty) {
         _errorMessage = 'This email is already registered.';
         _isLoading = false; notifyListeners(); return false;
       }
-      // Check phone duplicate
       if (phone.isNotEmpty) {
         final pqry = await _db.collection('helpers')
             .where('phone', isEqualTo: phone.trim()).limit(1).get();
@@ -303,7 +299,6 @@ class AuthProvider extends ChangeNotifier {
           _isLoading = false; notifyListeners(); return false;
         }
       }
-      // Check username duplicate
       final uname = (username?.trim().toLowerCase()) ??
           name.trim().toLowerCase().replaceAll(' ', '_');
       final uqry = await _db.collection('helpers')
@@ -323,14 +318,33 @@ class AuthProvider extends ChangeNotifier {
         'name':            name.trim(),
         'username':        uname,
         'email':           email.trim().toLowerCase(),
+
+        // ← FIX: Store as both 'phone' AND 'phoneNumber'
+        //   Admin panel reads h.phoneNumber; Flutter model reads 'phone'
         'phone':           phone.trim(),
+        'phoneNumber':     phone.trim(),
+
         'services':        services,
+
+        // ← FIX: Store as both 'area' AND 'location'
+        //   Admin panel reads h.location; Flutter model reads 'area'
         'area':            area.trim(),
+        'location':        area.trim(),
+
+        // ← FIX: Store serviceType as first selected service (admin expects a string)
+        //   Admin panel reads h.serviceType
+        'serviceType':     services.isNotEmpty ? services.first : '',
+
         'status':          'pending',
         'rating':          0.0,
         'totalJobs':       0,
         'kycDone':         false,
         'kycSkipped':      false,
+
+        // ← FIX: Added kycStatus field — admin filters by kycStatus === 'pending'
+        //   Without this, no KYC submissions will ever appear in admin panel
+        'kycStatus':       'not_submitted',
+
         'isOnline':        false,
         'totalBalance':    0.0,
         'weeklyEarnings':  0.0,
@@ -360,16 +374,44 @@ class AuthProvider extends ChangeNotifier {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // KYC
+  // KYC  ← ALL BUGS WERE HERE
   // ─────────────────────────────────────────────────────────────
   Future<bool> submitKyc(Map<String, String> kycData) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return false;
     try {
       await _db.collection('helpers').doc(uid).update({
-        'kycData': kycData, 'kycDone': true,
-        'status': 'submitted', 'updatedAt': FieldValue.serverTimestamp(),
+        // ← FIX 1 (ROOT CAUSE): Was 'kycData' — admin reads from 'kycDocuments'
+        //   The entire KYC modal in admin does: const docs = h.kycDocuments || {}
+        //   Saving under 'kycData' means docs is always {}, showing '—' for everything
+        'kycDocuments':    kycData,
+
+        // ← FIX 2 (ROOT CAUSE): Was 'status': 'submitted'
+        //   Admin filters with: allHelpers.filter(h => h.kycStatus === 'pending')
+        //   'status' and 'kycStatus' are TWO DIFFERENT FIELDS.
+        //   'status' being 'submitted' has zero effect on KYC visibility.
+        //   Without this line, admin will always show "No pending KYC applications".
+        'kycStatus':       'pending',
+
+        // ← FIX 3: kycDone should remain false until admin APPROVES, not on submission
+        //   Setting kycDone:true here would incorrectly mark KYC as complete
+        //   before admin review
+        'kycDone':         false,
+
+        // ← FIX 4: Added kycSubmittedAt — admin modal displays this field:
+        //   h.kycSubmittedAt?.toDate ? h.kycSubmittedAt.toDate().toLocaleDateString() : 'N/A'
+        //   Without this, "Submitted On" always shows 'N/A'
+        'kycSubmittedAt':  FieldValue.serverTimestamp(),
+
+        'updatedAt':       FieldValue.serverTimestamp(),
       });
+
+      // Update local model immediately so UI reflects pending state
+      if (_helper != null) {
+        _helper = _helper!.copyWith(kycStatus: 'pending');
+        notifyListeners();
+      }
+
       return true;
     } catch (e) {
       _errorMessage = _friendlyError(e); notifyListeners(); return false;
@@ -380,7 +422,11 @@ class AuthProvider extends ChangeNotifier {
     final uid = _auth.currentUser?.uid; if (uid == null) return;
     try {
       await _db.collection('helpers').doc(uid).update({
-        'kycSkipped': true, 'updatedAt': FieldValue.serverTimestamp()});
+        'kycSkipped': true,
+        // ← FIX: Explicitly set kycStatus so admin filtering stays clean
+        'kycStatus':  'not_submitted',
+        'updatedAt':  FieldValue.serverTimestamp(),
+      });
     } catch (_) {}
   }
 
@@ -397,11 +443,14 @@ class AuthProvider extends ChangeNotifier {
     if (uid == null) return false;
     try {
       await _db.collection('helpers').doc(uid).update({
-        'name':      name.trim(),
-        'phone':     phone.trim(),
-        'area':      area.trim(),
-        'services':  services,
-        'updatedAt': FieldValue.serverTimestamp(),
+        'name':        name.trim(),
+        'phone':       phone.trim(),
+        'phoneNumber': phone.trim(),   // ← FIX: keep alias in sync
+        'area':        area.trim(),
+        'location':    area.trim(),    // ← FIX: keep alias in sync
+        'services':    services,
+        'serviceType': services.isNotEmpty ? services.first : '',  // ← FIX
+        'updatedAt':   FieldValue.serverTimestamp(),
       });
       await _auth.currentUser!.updateDisplayName(name.trim());
       return true;

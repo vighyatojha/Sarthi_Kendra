@@ -21,12 +21,11 @@ android {
 
     defaultConfig {
         applicationId = "com.example.sarthi_kendra"
-        minSdk = 23
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        // Required for Google Sign-In
         multiDexEnabled = true
     }
 
@@ -47,19 +46,14 @@ flutter {
 }
 
 dependencies {
-    // Firebase BoM — controls all Firebase library versions together
     implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
 
-    // Firebase products
     implementation("com.google.firebase:firebase-analytics-ktx")
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation("com.google.firebase:firebase-storage-ktx")
     implementation("com.google.firebase:firebase-messaging-ktx")
 
-    // Google Sign-In
     implementation("com.google.android.gms:play-services-auth:20.7.0")
-
-    // MultiDex support
     implementation("androidx.multidex:multidex:2.0.1")
 }
