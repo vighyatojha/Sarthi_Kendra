@@ -1,14 +1,26 @@
 // lib/screens/jobs/ongoing_job_screen.dart
+//
+// FIX 10 APPLIED:
+//  • _JobStage enum REMOVED — UI driven entirely from Firestore status field
+//  • status == 'accepted' → show "Navigate to Customer" card + "Start Job" button
+//  • status == 'ongoing'  → show live elapsed timer (from startedAt Timestamp)
+//                           + "Mark as Complete" button
+//  • status == 'completed' → completion dialog auto-shown, then navigate back
+//  • "Start Job" writes {status:'ongoing', startedAt: serverTimestamp()}
+//  • "Mark Complete" writes {status:'completed', completedAt: serverTimestamp()}
+//    + FieldValue.increment(1) on helpers/{uid}.completedJobs  (in a batch)
+//  • data['amount'] → baseAmount only (platform fee never shown to helper)
+//  • data['userName'] removed — userName not stored in bookings (per model)
+//  • _StageIndicator refactored to accept status String, not _JobStage
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
-
-/// Stages of a job lifecycle
-enum _JobStage { navigating, started, completing, done }
 
 class OngoingJobScreen extends StatefulWidget {
   final String bookingId;
@@ -21,32 +33,49 @@ class OngoingJobScreen extends StatefulWidget {
 class _OngoingJobScreenState extends State<OngoingJobScreen>
     with TickerProviderStateMixin {
 
-  _JobStage _stage       = _JobStage.navigating;
-  bool      _isUpdating  = false;
-  Timer?    _jobTimer;
-  int       _elapsedSecs = 0;
+  // ── Elapsed timer (only active when status == 'ongoing') ─────
+  Timer? _timer;
+  int    _elapsedSecs    = 0;
+  bool   _timerRunning   = false;
 
-  late final AnimationController _stageCtrl;
-  late final Animation<double>   _stageFade;
+  // ── Guard: show completion dialog only once ───────────────────
+  bool _completionShown  = false;
+
+  // ── Action loading ────────────────────────────────────────────
+  bool _isUpdating       = false;
+
+  // ── Fade animation between stages ────────────────────────────
+  late final AnimationController _fadeCtrl;
+  late final Animation<double>   _fade;
 
   @override
   void initState() {
     super.initState();
-    _stageCtrl = AnimationController(
+    _fadeCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 350));
-    _stageFade = CurvedAnimation(parent: _stageCtrl, curve: Curves.easeOut);
-    _stageCtrl.forward();
+    _fade = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
+    _fadeCtrl.forward();
   }
 
   @override
   void dispose() {
-    _jobTimer?.cancel();
-    _stageCtrl.dispose();
+    _timer?.cancel();
+    _fadeCtrl.dispose();
     super.dispose();
   }
 
-  void _startTimer() {
-    _jobTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+  // ── Elapsed timer helpers ─────────────────────────────────────
+  /// FIX 10 — Timer starts from Firestore `startedAt` Timestamp,
+  /// not from local state. Called once when stream first shows 'ongoing'.
+  void _maybeStartTimer(Timestamp? startedAt) {
+    if (_timerRunning) return;
+    _timerRunning = true;
+    if (startedAt != null) {
+      // Seed elapsed from how long ago the helper actually started
+      _elapsedSecs =
+          DateTime.now().difference(startedAt.toDate()).inSeconds.clamp(0, 999999);
+    }
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _elapsedSecs++);
     });
   }
@@ -59,31 +88,66 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
-  Future<void> _transition(_JobStage next, {Map<String, dynamic>? updates}) async {
+  // ── Firestore actions ─────────────────────────────────────────
+
+  /// FIX 10 — "Start Job": writes 'ongoing' + startedAt.
+  /// Does NOT change scheduledAt (set by customer).
+  Future<void> _startJob() async {
     setState(() => _isUpdating = true);
     try {
-      final data = <String, dynamic>{
-        'updatedAt': FieldValue.serverTimestamp(),
-        ...?updates,
-      };
       await FirebaseFirestore.instance
-          .collection('bookings').doc(widget.bookingId)
-          .update(data);
-    } catch (e) {
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .update({
+        'status':    'ongoing',
+        'startedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      _fadeCtrl.reset();
+      _fadeCtrl.forward();
+    } catch (_) {
       _snack('Update failed. Try again.', error: true);
-      setState(() => _isUpdating = false);
-      return;
     }
-    _stageCtrl.reset();
-    setState(() { _stage = next; _isUpdating = false; });
-    _stageCtrl.forward();
+    if (mounted) setState(() => _isUpdating = false);
+  }
 
-    if (next == _JobStage.started) _startTimer();
-    if (next == _JobStage.done) {
-      _jobTimer?.cancel();
-      await Future.delayed(const Duration(milliseconds: 400));
-      if (mounted) _showCompletionDialog();
+  /// FIX 10 — "Mark Complete": batch write — booking completed + helper counter.
+  /// Shows confirmation sheet first to prevent accidental taps.
+  Future<void> _confirmAndComplete(String helperUid) async {
+    final confirmed = await showModalBottomSheet<bool>(
+      context:   context,
+      isDismissible: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => _CompleteConfirmSheet(),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _isUpdating = true);
+    try {
+      _timer?.cancel();
+      final db    = FirebaseFirestore.instance;
+      final batch = db.batch();
+
+      batch.update(db.collection('bookings').doc(widget.bookingId), {
+        'status':      'completed',
+        'completedAt': FieldValue.serverTimestamp(),
+        'updatedAt':   FieldValue.serverTimestamp(),
+      });
+
+      // FIX 10 — increment completedJobs on the helper document
+      if (helperUid.isNotEmpty) {
+        batch.update(db.collection('helpers').doc(helperUid), {
+          'completedJobs': FieldValue.increment(1),
+        });
+      }
+
+      await batch.commit();
+      // Completion dialog will be shown by the StreamBuilder listener
+    } catch (_) {
+      _snack('Update failed. Try again.', error: true);
     }
+    if (mounted) setState(() => _isUpdating = false);
   }
 
   void _snack(String msg, {bool error = false}) {
@@ -95,56 +159,79 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
     ));
   }
 
+  // ── Build ─────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isDark   = Theme.of(context).brightness == Brightness.dark;
+    final helperUid = context.read<AuthProvider>().helper?.uid ?? '';
 
     return Scaffold(
       backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
-            .collection('bookings').doc(widget.bookingId).snapshots(),
+            .collection('bookings')
+            .doc(widget.bookingId)
+            .snapshots(),
         builder: (context, snap) {
-          final data        = snap.data?.data() as Map<String, dynamic>? ?? {};
-          final userName    = data['userName']    as String? ?? 'Customer';
-          final serviceName = data['serviceName'] as String? ?? 'Service';
-          final amount      = ((data['amount'] ?? 0) as num).toDouble();
-          final address     = data['address']     as String? ?? 'Loading address...';
-          final userPhone   = data['userPhone']   as String? ?? '';
+          final data    = snap.data?.data() as Map<String, dynamic>? ?? {};
+          // FIX 10 — drive EVERYTHING from Firestore status
+          final status  = (data['status'] as String?) ?? 'accepted';
+
+          // FIX 10 — userName is NOT stored in bookings (per data model).
+          // Display customer generically.
+          final serviceName = (data['serviceName'] as String?) ?? 'Service';
+          // FIX 10 — baseAmount only; platform fee (platformFee) is app revenue
+          final amount      = (data['baseAmount']  as num?)?.toDouble()
+              ?? (data['totalAmount'] as num?)?.toDouble()
+              ?? 0.0;
+          final address     = (data['address']     as String?) ?? '';
+          final userPhone   = (data['userPhone']   as String?) ?? '';
+          final startedAt   = data['startedAt']    as Timestamp?;
+
+          // FIX 10 — start timer from Firestore startedAt when status is 'ongoing'
+          if (status == 'ongoing') {
+            WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _maybeStartTimer(startedAt));
+          }
+
+          // FIX 10 — when Firestore confirms 'completed', show dialog once
+          if (status == 'completed' && !_completionShown) {
+            _completionShown = true;
+            WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _showCompletionDialog());
+          }
 
           return Column(children: [
-            // ── Header ──────────────────────────────────────────
-            _buildHeader(isDark, serviceName),
-
+            _buildHeader(isDark, serviceName, status),
             Expanded(child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
               child: FadeTransition(
-                opacity: _stageFade,
+                opacity: _fade,
                 child: Column(children: [
-                  // Stage progress indicator
-                  _StageIndicator(stage: _stage),
+                  // FIX 10 — stage indicator reads from Firestore status
+                  _StageIndicator(status: status),
                   const SizedBox(height: 20),
 
-                  // Customer info card
                   _CustomerCard(
-                      name: userName, phone: userPhone,
-                      address: address, isDark: isDark),
+                      phone:   userPhone,
+                      address: address,
+                      isDark:  isDark),
                   const SizedBox(height: 16),
 
-                  // Job + earnings card
                   _JobInfoRow(
-                      service: serviceName, amount: amount,
-                      elapsed: _stage == _JobStage.started ? _elapsed : null,
-                      isDark: isDark),
+                      service: serviceName,
+                      amount:  amount,
+                      elapsed: status == 'ongoing' ? _elapsed : null,
+                      isDark:  isDark),
                   const SizedBox(height: 16),
 
-                  // Stage-specific content
-                  if (_stage == _JobStage.navigating)
+                  // FIX 10 — show correct card based on Firestore status
+                  if (status == 'accepted')
                     _NavigatingCard(isDark: isDark),
-                  if (_stage == _JobStage.started)
+                  if (status == 'ongoing')
                     _ActiveJobCard(elapsed: _elapsed, isDark: isDark),
-                  if (_stage == _JobStage.completing)
-                    _CompletingCard(isDark: isDark),
+                  if (status == 'completed')
+                    _CompletedCard(isDark: isDark),
 
                   const SizedBox(height: 80),
                 ]),
@@ -155,11 +242,26 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
       ),
 
       // ── Bottom action bar ─────────────────────────────────────
-      bottomNavigationBar: _buildActionBar(isDark),
+      bottomNavigationBar: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('bookings')
+            .doc(widget.bookingId)
+            .snapshots(),
+        builder: (context, snap) {
+          final data   = snap.data?.data() as Map<String, dynamic>? ?? {};
+          final status = (data['status'] as String?) ?? 'accepted';
+          return _buildActionBar(isDark, status, helperUid);
+        },
+      ),
     );
   }
 
-  Widget _buildHeader(bool isDark, String serviceName) {
+  // ── Header ────────────────────────────────────────────────────
+  Widget _buildHeader(bool isDark, String serviceName, String status) {
+    final title = _headerTitle(status);
+    final badge = _headerBadge(status);
+    final color = _headerColor(status);
+
     return Container(
       padding: EdgeInsets.only(
         top: MediaQuery.of(context).padding.top + 12,
@@ -179,35 +281,34 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
         ),
         Expanded(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_stageTitle, style: const TextStyle(
+          Text(title, style: const TextStyle(
               color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
           Text(serviceName, style: TextStyle(
               color: Colors.white.withOpacity(0.65), fontSize: 12)),
         ])),
-        // Stage badge
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color:        _stageColor.withOpacity(0.2),
+            color:        color.withOpacity(0.2),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _stageColor.withOpacity(0.5)),
+            border: Border.all(color: color.withOpacity(0.5)),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Container(
               width: 6, height: 6,
-              decoration: BoxDecoration(
-                  color: _stageColor, shape: BoxShape.circle),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
             const SizedBox(width: 6),
-            Text(_stageBadge, style: TextStyle(
-                color: _stageColor, fontSize: 11, fontWeight: FontWeight.w700)),
+            Text(badge, style: TextStyle(
+                color: color, fontSize: 11, fontWeight: FontWeight.w700)),
           ]),
         ),
       ]),
     );
   }
 
-  Widget _buildActionBar(bool isDark) {
+  // ── Action bar ────────────────────────────────────────────────
+  Widget _buildActionBar(bool isDark, String status, String helperUid) {
     return Container(
       padding: EdgeInsets.only(
         left: 16, right: 16, top: 12,
@@ -218,89 +319,68 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
         border: Border(top: BorderSide(
             color: isDark ? AppColors.borderDark : AppColors.borderLight)),
       ),
-      child: _buildActionButton(isDark),
+      child: _buildActionButton(isDark, status, helperUid),
     );
   }
 
-  Widget _buildActionButton(bool isDark) {
-    switch (_stage) {
-      case _JobStage.navigating:
-        return SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: _isUpdating ? null : () => _transition(
-              _JobStage.started,
-              updates: {'status': 'in_progress', 'startedAt': FieldValue.serverTimestamp()},
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.success,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            icon: _isUpdating
-                ? const SizedBox(width: 18, height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.play_circle_rounded, size: 22),
-            label: Text(_isUpdating ? 'Starting...' : 'Start Job',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+  Widget _buildActionButton(bool isDark, String status, String helperUid) {
+    // FIX 10 — action button driven by Firestore status, not local enum
+    if (status == 'accepted') {
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: _isUpdating ? null : _startJob,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.success,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           ),
-        );
-
-      case _JobStage.started:
-        return SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: _isUpdating ? null : () => _transition(_JobStage.completing),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.brandPurple,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            icon: _isUpdating
-                ? const SizedBox(width: 18, height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.check_circle_rounded, size: 22),
-            label: Text(_isUpdating ? 'Processing...' : 'Mark as Complete',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          ),
-        );
-
-      case _JobStage.completing:
-        return SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: _isUpdating ? null : () => _transition(
-              _JobStage.done,
-              updates: {'status': 'completed', 'completedAt': FieldValue.serverTimestamp()},
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.success,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            icon: _isUpdating
-                ? const SizedBox(width: 18, height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.verified_rounded, size: 22),
-            label: Text(_isUpdating ? 'Completing...' : 'Confirm Completion',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          ),
-        );
-
-      case _JobStage.done:
-        return const SizedBox.shrink();
+          icon: _isUpdating
+              ? const SizedBox(width: 18, height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.play_circle_rounded, size: 22, color: Colors.white),
+          label: Text(_isUpdating ? 'Starting...' : 'Start Job',
+              style: const TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+        ),
+      );
     }
+
+    if (status == 'ongoing') {
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: _isUpdating ? null : () => _confirmAndComplete(helperUid),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.brandPurple,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          icon: _isUpdating
+              ? const SizedBox(width: 18, height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.check_circle_rounded, size: 22, color: Colors.white),
+          label: Text(_isUpdating ? 'Processing...' : 'Mark as Complete',
+              style: const TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 
   // ── Completion dialog ─────────────────────────────────────────
   Future<void> _showCompletionDialog() async {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     await showDialog(
-      context: context,
+      context:          context,
       barrierDismissible: false,
       builder: (_) => Dialog(
-        backgroundColor: isDark ? AppColors.cardDark : Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor:
+        isDark ? AppColors.cardDark : Colors.white,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24)),
         child: Padding(
           padding: const EdgeInsets.all(28),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -317,8 +397,8 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
             Text('Job Completed! 🎉',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                    color:      isDark ? Colors.white : AppColors.textDarkLight,
-                    fontSize:   22, fontWeight: FontWeight.w800)),
+                    color: isDark ? Colors.white : AppColors.textDarkLight,
+                    fontSize: 22, fontWeight: FontWeight.w800)),
             const SizedBox(height: 10),
             Text('Great work! Your payment will be\ncredited to your wallet shortly.',
                 textAlign: TextAlign.center,
@@ -327,7 +407,7 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
                     fontSize: 14, height: 1.5)),
             const SizedBox(height: 8),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding:    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
                 color:        AppColors.success.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(12),
@@ -368,73 +448,88 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
     );
   }
 
-  String get _stageTitle {
-    switch (_stage) {
-      case _JobStage.navigating:  return 'Navigate to Customer';
-      case _JobStage.started:     return 'Job In Progress';
-      case _JobStage.completing:  return 'Confirm Completion';
-      case _JobStage.done:        return 'Job Done';
+  // ── Header helpers ────────────────────────────────────────────
+  String _headerTitle(String status) {
+    switch (status) {
+      case 'accepted':  return 'Navigate to Customer';
+      case 'ongoing':   return 'Job In Progress';
+      case 'completed': return 'Job Done';
+      default:          return 'Job Details';
     }
   }
 
-  String get _stageBadge {
-    switch (_stage) {
-      case _JobStage.navigating:  return 'DRIVING';
-      case _JobStage.started:     return 'ACTIVE';
-      case _JobStage.completing:  return 'FINISHING';
-      case _JobStage.done:        return 'DONE';
+  String _headerBadge(String status) {
+    switch (status) {
+      case 'accepted':  return 'DRIVING';
+      case 'ongoing':   return 'ACTIVE';
+      case 'completed': return 'DONE';
+      default:          return status.toUpperCase();
     }
   }
 
-  Color get _stageColor {
-    switch (_stage) {
-      case _JobStage.navigating:  return AppColors.cyanAccent;
-      case _JobStage.started:     return AppColors.onlineGreen;
-      case _JobStage.completing:  return AppColors.warning;
-      case _JobStage.done:        return AppColors.success;
+  Color _headerColor(String status) {
+    switch (status) {
+      case 'accepted':  return AppColors.cyanAccent;
+      case 'ongoing':   return AppColors.onlineGreen;
+      case 'completed': return AppColors.success;
+      default:          return AppColors.brandPurple;
     }
   }
 }
 
-// ── Stage indicator ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// STAGE INDICATOR
+// FIX 10 — accepts status String instead of _JobStage enum
+// ─────────────────────────────────────────────────────────────────────────────
 class _StageIndicator extends StatelessWidget {
-  final _JobStage stage;
-  const _StageIndicator({required this.stage});
+  /// Firestore status string: 'accepted' | 'ongoing' | 'completed'
+  final String status;
+  const _StageIndicator({required this.status});
+
+  int get _currentStep {
+    switch (status) {
+      case 'accepted':  return 0;
+      case 'ongoing':   return 1;
+      case 'completed': return 3;
+      default:          return 0;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final isDark  = Theme.of(context).brightness == Brightness.dark;
-    final stages  = [_JobStage.navigating, _JobStage.started, _JobStage.completing, _JobStage.done];
     final labels  = ['Navigate', 'Working', 'Complete', 'Done'];
-    final current = stages.indexOf(stage);
+    final current = _currentStep;
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color:        isDark ? AppColors.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isDark ? AppColors.borderDark : AppColors.borderLight),
+        border: Border.all(
+            color: isDark ? AppColors.borderDark : AppColors.borderLight),
       ),
       child: Row(
-        children: List.generate(stages.length * 2 - 1, (i) {
+        children: List.generate(labels.length * 2 - 1, (i) {
           if (i.isOdd) {
-            // Connector line
             final done = current > i ~/ 2;
             return Expanded(child: Container(
               height: 2,
-              color: done ? AppColors.success : (isDark ? AppColors.borderDark : AppColors.borderLight),
+              color: done
+                  ? AppColors.success
+                  : (isDark ? AppColors.borderDark : AppColors.borderLight),
             ));
           }
-          final idx  = i ~/ 2;
-          final done = current > idx;
+          final idx    = i ~/ 2;
+          final done   = current > idx;
           final active = current == idx;
           return Column(children: [
             AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               width: 28, height: 28,
               decoration: BoxDecoration(
-                color: done    ? AppColors.success
-                    : active  ? AppColors.brandPurple
+                color: done   ? AppColors.success
+                    : active ? AppColors.brandPurple
                     : Colors.transparent,
                 shape: BoxShape.circle,
                 border: Border.all(
@@ -467,13 +562,17 @@ class _StageIndicator extends StatelessWidget {
   }
 }
 
-// ── Customer card ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CUSTOMER CARD
+// FIX 10 — 'userName' not stored in bookings; shows generic label
+// ─────────────────────────────────────────────────────────────────────────────
 class _CustomerCard extends StatelessWidget {
-  final String name, phone, address;
-  final bool isDark;
+  // Note: userName is NOT stored in the bookings collection (per data model).
+  // We show "Customer" generically; phone and address come from booking doc.
+  final String phone, address;
+  final bool   isDark;
   const _CustomerCard({
-    required this.name, required this.phone,
-    required this.address, required this.isDark});
+    required this.phone, required this.address, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
@@ -482,7 +581,8 @@ class _CustomerCard extends StatelessWidget {
       decoration: BoxDecoration(
         color:        isDark ? AppColors.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isDark ? AppColors.borderDark : AppColors.borderLight),
+        border: Border.all(
+            color: isDark ? AppColors.borderDark : AppColors.borderLight),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -492,22 +592,25 @@ class _CustomerCard extends StatelessWidget {
               color: AppColors.brandPurple.withOpacity(0.12),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.person_rounded, color: AppColors.brandPurple, size: 26),
+            child: const Icon(Icons.person_rounded,
+                color: AppColors.brandPurple, size: 26),
           ),
           const SizedBox(width: 14),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name, style: TextStyle(
+          Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Customer', style: TextStyle(
                 color:      isDark ? Colors.white : AppColors.textDarkLight,
                 fontSize:   16, fontWeight: FontWeight.w700)),
             if (phone.isNotEmpty)
               Row(children: [
-                const Icon(Icons.phone_rounded, size: 12, color: AppColors.success),
+                const Icon(Icons.phone_rounded,
+                    size: 12, color: AppColors.success),
                 const SizedBox(width: 4),
-                Text(phone, style: TextStyle(
-                    color: AppColors.success, fontSize: 13, fontWeight: FontWeight.w500)),
+                Text(phone, style: const TextStyle(
+                    color: AppColors.success,
+                    fontSize: 13, fontWeight: FontWeight.w500)),
               ]),
           ])),
-          // Call button
           if (phone.isNotEmpty)
             Container(
               width: 40, height: 40,
@@ -537,12 +640,14 @@ class _CustomerCard extends StatelessWidget {
   }
 }
 
-// ── Job info row ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// JOB INFO ROW
+// ─────────────────────────────────────────────────────────────────────────────
 class _JobInfoRow extends StatelessWidget {
-  final String service;
-  final double amount;
+  final String  service;
+  final double  amount;
   final String? elapsed;
-  final bool isDark;
+  final bool    isDark;
   const _JobInfoRow({
     required this.service, required this.amount,
     this.elapsed, required this.isDark});
@@ -555,7 +660,8 @@ class _JobInfoRow extends StatelessWidget {
           icon: Icons.build_rounded, isDark: isDark)),
       const SizedBox(width: 12),
       Expanded(child: _InfoTile(
-          label: 'EARNINGS', value: '₹${amount.toStringAsFixed(0)}',
+          label: 'YOUR EARNINGS',
+          value: '₹${amount.toStringAsFixed(0)}',
           icon: Icons.wallet_rounded, isDark: isDark,
           highlight: true)),
       if (elapsed != null) ...[
@@ -569,9 +675,9 @@ class _JobInfoRow extends StatelessWidget {
 }
 
 class _InfoTile extends StatelessWidget {
-  final String label, value;
+  final String   label, value;
   final IconData icon;
-  final bool isDark, highlight;
+  final bool     isDark, highlight;
   const _InfoTile({
     required this.label, required this.value,
     required this.icon, required this.isDark, this.highlight = false});
@@ -610,7 +716,12 @@ class _InfoTile extends StatelessWidget {
   }
 }
 
-// ── Stage-specific cards ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// STAGE-SPECIFIC CARDS
+// FIX 10 — shown/hidden based on Firestore status, not local _JobStage
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Shown when status == 'accepted': navigate to customer first
 class _NavigatingCard extends StatelessWidget {
   final bool isDark;
   const _NavigatingCard({required this.isDark});
@@ -621,14 +732,13 @@ class _NavigatingCard extends StatelessWidget {
       decoration: BoxDecoration(
         color:        isDark ? AppColors.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: AppColors.cyanAccent.withOpacity(0.3)),
+        border: Border.all(color: AppColors.cyanAccent.withOpacity(0.3)),
       ),
       child: Column(children: [
         Container(
           width: 56, height: 56,
           decoration: BoxDecoration(
-              color:        AppColors.cyanAccent.withOpacity(0.12),
+              color: AppColors.cyanAccent.withOpacity(0.12),
               shape: BoxShape.circle),
           child: const Icon(Icons.navigation_rounded,
               color: AppColors.cyanAccent, size: 28),
@@ -639,7 +749,8 @@ class _NavigatingCard extends StatelessWidget {
                 color:      isDark ? Colors.white : AppColors.textDarkLight,
                 fontSize:   16, fontWeight: FontWeight.w700)),
         const SizedBox(height: 6),
-        Text('Press "Start Job" when you arrive at the customer\'s location.',
+        Text(
+            'Press "Start Job" when you arrive at the customer\'s location.',
             textAlign: TextAlign.center,
             style: TextStyle(
                 color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
@@ -659,7 +770,9 @@ class _NavigatingCard extends StatelessWidget {
             Expanded(child: Text(
                 'Only start after you physically arrive.',
                 style: TextStyle(
-                    color:    isDark ? AppColors.warning : const Color(0xFF92400E),
+                    color: isDark
+                        ? AppColors.warning
+                        : const Color(0xFF92400E),
                     fontSize: 12))),
           ]),
         ),
@@ -668,9 +781,10 @@ class _NavigatingCard extends StatelessWidget {
   }
 }
 
+/// Shown when status == 'ongoing': live elapsed timer display
 class _ActiveJobCard extends StatelessWidget {
   final String elapsed;
-  final bool isDark;
+  final bool   isDark;
   const _ActiveJobCard({required this.elapsed, required this.isDark});
   @override
   Widget build(BuildContext context) {
@@ -679,8 +793,7 @@ class _ActiveJobCard extends StatelessWidget {
       decoration: BoxDecoration(
         color:        isDark ? AppColors.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: AppColors.onlineGreen.withOpacity(0.35)),
+        border: Border.all(color: AppColors.onlineGreen.withOpacity(0.35)),
       ),
       child: Column(children: [
         Row(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -720,9 +833,10 @@ class _ActiveJobCard extends StatelessWidget {
   }
 }
 
-class _CompletingCard extends StatelessWidget {
+/// Shown when status == 'completed': success banner while dialog loads
+class _CompletedCard extends StatelessWidget {
   final bool isDark;
-  const _CompletingCard({required this.isDark});
+  const _CompletedCard({required this.isDark});
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -730,22 +844,89 @@ class _CompletingCard extends StatelessWidget {
       decoration: BoxDecoration(
         color:        isDark ? AppColors.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.warning.withOpacity(0.35)),
+        border: Border.all(color: AppColors.success.withOpacity(0.35)),
       ),
       child: Column(children: [
-        const Icon(Icons.assignment_turned_in_rounded,
-            color: AppColors.warning, size: 40),
+        const Icon(Icons.check_circle_rounded,
+            color: AppColors.success, size: 48),
         const SizedBox(height: 12),
-        Text('Confirm Job Completion',
+        Text('Job Completed!',
             style: TextStyle(
                 color:      isDark ? Colors.white : AppColors.textDarkLight,
                 fontSize:   16, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 8),
-        Text('Ask the customer to confirm the work is done before you tap "Confirm".',
+        const SizedBox(height: 6),
+        Text('Great work! Your earnings will be credited shortly.',
             textAlign: TextAlign.center,
             style: TextStyle(
                 color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
                 fontSize: 13, height: 1.5)),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLETE CONFIRMATION BOTTOM SHEET
+// Shown when helper taps "Mark as Complete" — prevents accidental taps
+// ─────────────────────────────────────────────────────────────────────────────
+class _CompleteConfirmSheet extends StatelessWidget {
+  const _CompleteConfirmSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 24, right: 24, top: 24,
+        bottom: MediaQuery.of(context).padding.bottom + 24,
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 40, height: 4,
+          margin: const EdgeInsets.only(bottom: 20),
+          decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(4)),
+        ),
+        const Icon(Icons.assignment_turned_in_rounded,
+            color: AppColors.warning, size: 44),
+        const SizedBox(height: 14),
+        const Text('Confirm Job Completion',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        const Text(
+          'Ask the customer to confirm the work is done before tapping Confirm.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.5),
+        ),
+        const SizedBox(height: 24),
+        Row(children: [
+          Expanded(child: OutlinedButton(
+            onPressed: () => Navigator.pop(context, false),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              side: const BorderSide(color: Colors.grey),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Cancel',
+                style: TextStyle(
+                    color: Colors.grey, fontWeight: FontWeight.w600)),
+          )),
+          const SizedBox(width: 12),
+          Expanded(child: ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.success,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Confirm',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w700,
+                    fontSize: 15)),
+          )),
+        ]),
       ]),
     );
   }

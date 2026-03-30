@@ -1,22 +1,3 @@
-// lib/screens/dashboard/helper_dashboard.dart
-// ═══════════════════════════════════════════════════════════════════════════
-//  SARTHI KENDRA — Dashboard (light theme only, no duplicate screens)
-//
-//  Tab layout:
-//    0 — JOBS   (new, redesigned inline)
-//    1 — HOME   (new, redesigned inline)
-//    2 — EARN   → existing EarningsScreen
-//    3 — ME     → existing HelperProfileScreen
-//
-//  Removed from this file:
-//    _EarnTab, _MeTab and all their sub-widgets (duplicated existing files)
-//    All isDark / dark-theme branches
-//
-//  pubspec.yaml additions needed:
-//    url_launcher: ^6.2.5
-//    geolocator: ^12.0.0   (already present)
-// ═══════════════════════════════════════════════════════════════════════════
-
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -25,6 +6,9 @@ import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
+import '../schedule/schedule_screen.dart';
+import '../location/helper_location_screen.dart';
 
 import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
@@ -38,6 +22,18 @@ import '../support/support_screen.dart';
 import '../earning/earnings_screen.dart';
 import '../profile/helper_profile_screen.dart';
 import '../../widgets/notification_bell.dart';
+
+// ─── Unified booking status constants ────────────────────────────────────────
+// NEVER use: active, declined, timeout, navigating, started, completing,
+//            done, in_progress — only these 5 values are valid:
+// pending → accepted → ongoing → completed → cancelled
+class _Status {
+  static const pending   = 'pending';
+  static const accepted  = 'accepted';
+  static const ongoing   = 'ongoing';
+  static const completed = 'completed';
+  static const cancelled = 'cancelled';
+}
 
 // ─── Light-only palette ──────────────────────────────────────────────────────
 class _P {
@@ -56,6 +52,48 @@ class _P {
   static const div    = Color(0xFFF1F0FF);
 }
 
+double _safeDouble(dynamic v) =>
+    v == null ? 0.0 : v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0.0;
+
+int _safeInt(dynamic v) =>
+    v == null ? 0 : v is num ? v.toInt() : int.tryParse(v.toString()) ?? 0;
+
+// ─── Amount helper: NEVER show platformFee to helper — only baseAmount ───────
+// platformFee is app revenue and must stay internal / admin-only.
+double _helperAmount(Map<String, dynamic> d) =>
+    _safeDouble(d['baseAmount']);
+
+// ─── Payment method badge ────────────────────────────────────────────────────
+Widget _paymentBadge(String? method) {
+  final isCash = (method ?? 'Cash') == 'Cash';
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: (isCash ? _P.green : _P.purple).withOpacity(0.10),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(
+        color: (isCash ? _P.green : _P.purple).withOpacity(0.25),
+      ),
+    ),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(
+        isCash ? Icons.payments_rounded : Icons.phone_android_rounded,
+        size: 11,
+        color: isCash ? _P.green : _P.purple,
+      ),
+      const SizedBox(width: 4),
+      Text(
+        isCash ? 'Cash' : 'UPI',
+        style: TextStyle(
+          color: isCash ? _P.green : _P.purple,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    ]),
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ROOT SCAFFOLD
 // ═══════════════════════════════════════════════════════════════════════════
@@ -72,11 +110,9 @@ class _HelperDashboardState extends State<HelperDashboard>
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
 
-  // Background GPS
   StreamSubscription<Position>? _locSub;
   Position? _myPos;
 
-  // Badge counter for JOBS tab
   StreamSubscription<QuerySnapshot>? _badgeSub;
   int _pendingCount = 0;
 
@@ -129,9 +165,10 @@ class _HelperDashboardState extends State<HelperDashboard>
   }
 
   void _initBadge() {
+    // Badge counts only status == 'pending' — no helper assigned yet
     _badgeSub = FirebaseFirestore.instance
         .collection('bookings')
-        .where('status', isEqualTo: 'pending')
+        .where('status', isEqualTo: _Status.pending)
         .snapshots()
         .listen((s) {
       if (mounted) setState(() => _pendingCount = s.docs.length);
@@ -150,7 +187,6 @@ class _HelperDashboardState extends State<HelperDashboard>
   Widget build(BuildContext context) {
     final helper = context.watch<AuthProvider>().helper;
 
-    // KYC gates
     if (helper != null) {
       if (helper.isPending)   return _KycPending(helper: helper);
       if (helper.isSubmitted) return _KycUnderReview(helper: helper);
@@ -276,55 +312,7 @@ class _BottomNav extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// JOBS TAB
-// ═══════════════════════════════════════════════════════════════════════════
-class _JobsTab extends StatelessWidget {
-  final Position? myPos;
-  final int pendingCount;
-  final VoidCallback? onGoHome;
-  const _JobsTab({this.myPos, required this.pendingCount, this.onGoHome});
-
-  @override
-  Widget build(BuildContext context) {
-    final helper  = context.watch<AuthProvider>().helper;
-    final isHindi = context.watch<LanguageProvider>().isHindi;
-    final uid     = helper?.uid ?? '';
-
-    return Scaffold(
-      backgroundColor: _P.bg,
-      body: CustomScrollView(slivers: [
-        SliverToBoxAdapter(child: _TabHeader(
-          helper: helper,
-          isOnline: helper?.isOnline ?? false,
-          isHindi: isHindi,
-        )),
-        SliverToBoxAdapter(child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-          child: _StatusBanner(
-              helper: helper, count: pendingCount, isHindi: isHindi),
-        )),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 18, 16, 110),
-          sliver: SliverList(delegate: SliverChildListDelegate([
-            _OngoingJobSection(uid: uid, isHindi: isHindi),
-            _SecHead(
-              title: isHindi ? 'नए अनुरोध' : 'Pending Requests',
-              badge: pendingCount > 0 ? '$pendingCount Nearby' : null,
-            ),
-            const SizedBox(height: 12),
-            _PendingList(uid: uid, isHindi: isHindi, myPos: myPos),
-            const SizedBox(height: 22),
-            _HistoryBtn(isHindi: isHindi),
-            const SizedBox(height: 12),
-          ])),
-        ),
-      ]),
-    );
-  }
-}
-
-// ── Shared tab header (reference image style) ─────────────────────────────
+// ── Shared tab header ─────────────────────────────────────────────────────
 class _TabHeader extends StatelessWidget {
   final HelperModel? helper;
   final bool isOnline, isHindi;
@@ -358,7 +346,6 @@ class _TabHeader extends StatelessWidget {
       Expanded(child: Text(helper?.name ?? 'Helper',
           style: const TextStyle(
               color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700))),
-      // Online chip
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
@@ -434,7 +421,11 @@ class _StatusBanner extends StatelessWidget {
   }
 }
 
-// ── Ongoing job section ───────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX 10 — ONGOING JOB SECTION (Firestore-driven, no local _JobStage enum)
+// status == 'accepted' → show Start Job button (no timer)
+// status == 'ongoing'  → show live elapsed timer + Mark Complete
+// ═══════════════════════════════════════════════════════════════════════════
 class _OngoingJobSection extends StatelessWidget {
   final String uid;
   final bool isHindi;
@@ -443,26 +434,40 @@ class _OngoingJobSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (uid.isEmpty) return const SizedBox.shrink();
+    // REQUIRES COMPOSITE INDEX: helperId ASC + status (whereIn) — create via
+    // Firebase console or click the URL in debug output if index is missing.
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('bookings')
           .where('helperId', isEqualTo: uid)
-          .where('status', whereIn: ['accepted', 'in_progress'])
+          .where('status', whereIn: [_Status.accepted, _Status.ongoing])
           .limit(1)
           .snapshots(),
       builder: (ctx, snap) {
         if (!snap.hasData || snap.data!.docs.isEmpty) return const SizedBox.shrink();
         final doc = snap.data!.docs.first;
         final d   = doc.data() as Map<String, dynamic>;
+        final status = d['status'] as String? ?? _Status.accepted;
+
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Text('ONGOING JOB',
-                style: TextStyle(
-                    color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800)),
+            Text(
+              status == _Status.ongoing
+                  ? 'ONGOING JOB'
+                  : 'UPCOMING TODAY',
+              style: const TextStyle(
+                  color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800),
+            ),
             const SizedBox(width: 10),
-            _Chip(label: 'IN PROGRESS',
-                bg: AppColors.onlineGreen.withOpacity(0.12),
-                fg: AppColors.onlineGreen),
+            _Chip(
+              label: status == _Status.ongoing ? 'IN PROGRESS' : 'ACCEPTED',
+              bg: (status == _Status.ongoing
+                  ? AppColors.onlineGreen
+                  : _P.purple).withOpacity(0.12),
+              fg: status == _Status.ongoing
+                  ? AppColors.onlineGreen
+                  : _P.purple,
+            ),
           ]),
           const SizedBox(height: 12),
           _OngoingCard(bookingId: doc.id, data: d, uid: uid, isHindi: isHindi),
@@ -473,7 +478,7 @@ class _OngoingJobSection extends StatelessWidget {
   }
 }
 
-// ── Ongoing card with live timer ──────────────────────────────────────────
+// ── Ongoing card — driven entirely by Firestore status field ─────────────
 class _OngoingCard extends StatefulWidget {
   final String bookingId, uid;
   final Map<String, dynamic> data;
@@ -489,14 +494,32 @@ class _OngoingCard extends StatefulWidget {
 class _OngoingCardState extends State<_OngoingCard> {
   Timer? _timer;
   Duration _elapsed = Duration.zero;
-  bool _completing = false;
+  bool _actionBusy = false;
+
+  String get _status => widget.data['status'] as String? ?? _Status.accepted;
+  bool get _isOngoing => _status == _Status.ongoing;
 
   @override
   void initState() {
     super.initState();
+    if (_isOngoing) _startTimer();
+  }
+
+  @override
+  void didUpdateWidget(_OngoingCard old) {
+    super.didUpdateWidget(old);
+    // If status transitioned to ongoing, start the timer
+    final wasOngoing = old.data['status'] == _Status.ongoing;
+    if (_isOngoing && !wasOngoing) _startTimer();
+    if (!_isOngoing && wasOngoing) { _timer?.cancel(); _timer = null; }
+  }
+
+  void _startTimer() {
+    // Timer elapsed from startedAt; fall back to now if missing
     final start =
-        (widget.data['acceptedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+        (widget.data['startedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
     _elapsed = DateTime.now().difference(start);
+    _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _elapsed += const Duration(seconds: 1));
     });
@@ -541,13 +564,36 @@ class _OngoingCardState extends State<_OngoingCard> {
     ));
   }
 
+  // FIX 10: "Start Job" — only when status == 'accepted'
+  // Writes status: 'ongoing' and startedAt: serverTimestamp()
+  Future<void> _startJob() async {
+    setState(() => _actionBusy = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection('bookings').doc(widget.bookingId).update({
+        'status':    _Status.ongoing,
+        'startedAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('🚀 Job started!'),
+          backgroundColor: _P.purple,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  // FIX 10: "Mark Complete" — writes status: 'completed' + increments completedJobs
   Future<void> _complete() async {
-    setState(() => _completing = true);
+    setState(() => _actionBusy = true);
     try {
       final db    = FirebaseFirestore.instance;
       final batch = db.batch();
       batch.update(db.collection('bookings').doc(widget.bookingId), {
-        'status': 'completed',
+        'status':      _Status.completed,
         'completedAt': FieldValue.serverTimestamp(),
       });
       batch.update(db.collection('helpers').doc(widget.uid), {
@@ -562,7 +608,7 @@ class _OngoingCardState extends State<_OngoingCard> {
         ));
       }
     } finally {
-      if (mounted) setState(() => _completing = false);
+      if (mounted) setState(() => _actionBusy = false);
     }
   }
 
@@ -589,10 +635,17 @@ class _OngoingCardState extends State<_OngoingCard> {
   Widget build(BuildContext context) {
     final d       = widget.data;
     final address = d['address'] as String? ?? d['userAddress'] as String? ?? '';
-    final amount  = ((d['amount'] ?? 0) as num).toDouble();
+    // FIX: helper only sees baseAmount — platformFee is never shown
+    final amount  = _helperAmount(d);
     final replies = widget.isHindi
         ? ['मैं रास्ते पर हूँ', 'पहुँच गया', 'काम शुरू हुआ', '5 मिनट में आता हूँ']
         : ["I'm on my way", 'Arrived at location', 'Job started', '5 mins away'];
+
+    // Extract scheduledAt for display
+    final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate().toLocal();
+    final schedStr = scheduledAt != null
+        ? DateFormat('d MMM, h:mm a').format(scheduledAt)
+        : '';
 
     return Container(
       decoration: BoxDecoration(
@@ -604,7 +657,7 @@ class _OngoingCardState extends State<_OngoingCard> {
             blurRadius: 18, offset: const Offset(0, 5))],
       ),
       child: Column(children: [
-        // Timer strip
+        // Header: timer (if ongoing) OR scheduled date (if accepted)
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
           decoration: const BoxDecoration(
@@ -612,29 +665,41 @@ class _OngoingCardState extends State<_OngoingCard> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Row(children: [
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_clock,
-                  style: const TextStyle(
-                      color: _P.purple, fontSize: 28, fontWeight: FontWeight.w800,
-                      letterSpacing: 1.5,
-                      fontFeatures: [FontFeature.tabularFigures()])),
-              const Text('CURRENT SESSION TIME',
-                  style: TextStyle(
-                      color: _P.t3, fontSize: 8,
-                      fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-            ]),
+            if (_isOngoing) ...[
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_clock,
+                    style: const TextStyle(
+                        color: _P.purple, fontSize: 28, fontWeight: FontWeight.w800,
+                        letterSpacing: 1.5,
+                        fontFeatures: [FontFeature.tabularFigures()])),
+                const Text('CURRENT SESSION TIME',
+                    style: TextStyle(
+                        color: _P.t3, fontSize: 8,
+                        fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+              ]),
+            ] else ...[
+              // Accepted — show service date instead of timer
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(schedStr,
+                    style: const TextStyle(
+                        color: _P.purple, fontSize: 16, fontWeight: FontWeight.w800)),
+                const Text('SCHEDULED DATE & TIME',
+                    style: TextStyle(
+                        color: _P.t3, fontSize: 8,
+                        fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+              ]),
+            ],
             const Spacer(),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('₹${amount.toStringAsFixed(2)}',
+              Text('₹${amount.toStringAsFixed(0)}',
                   style: const TextStyle(
                       color: _P.t1, fontSize: 22, fontWeight: FontWeight.w800)),
-              const Text('Fixed Rate',
-                  style: TextStyle(color: _P.t3, fontSize: 10)),
+              // Payment badge on card
+              _paymentBadge(d['paymentMethod'] as String?),
             ]),
           ]),
         ),
 
-        // Address
         if (address.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
@@ -665,48 +730,50 @@ class _OngoingCardState extends State<_OngoingCard> {
                     child: const Text('Open in Maps ↗',
                         style: TextStyle(
                             color: _P.purple, fontSize: 11,
-                            fontWeight: FontWeight.w700)),
+                            fontWeight: FontWeight.w600)),
                   ),
                 ])),
               ]),
             ),
           ),
 
-        // Quick replies
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('QUICK REPLIES',
-                style: TextStyle(
-                    color: _P.t3, fontSize: 8,
-                    fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 7,
-              children: replies.map((r) => GestureDetector(
-                onTap: () => _reply(r),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-                  decoration: BoxDecoration(
-                      color: _P.white,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFFDDD6FE))),
-                  child: Text(r,
-                      style: const TextStyle(
-                          color: _P.t2, fontSize: 12, fontWeight: FontWeight.w500)),
-                ),
-              )).toList(),
-            ),
-          ]),
-        ),
+        // Quick replies — shown only when ongoing
+        if (_isOngoing)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('QUICK REPLIES',
+                  style: TextStyle(
+                      color: _P.t3, fontSize: 8,
+                      fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 7,
+                children: replies.map((r) => GestureDetector(
+                  onTap: () => _reply(r),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+                    decoration: BoxDecoration(
+                        color: _P.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFFDDD6FE))),
+                    child: Text(r,
+                        style: const TextStyle(
+                            color: _P.t2, fontSize: 12, fontWeight: FontWeight.w500)),
+                  ),
+                )).toList(),
+              ),
+            ]),
+          ),
 
-        // Mark complete
+        // Action button — "Start Job" or "Mark Complete"
         Padding(
           padding: const EdgeInsets.all(14),
           child: SizedBox(
             width: double.infinity, height: 54,
-            child: ElevatedButton.icon(
-              onPressed: _completing ? null : _complete,
-              icon: _completing
+            child: _isOngoing
+                ? ElevatedButton.icon(
+              onPressed: _actionBusy ? null : _complete,
+              icon: _actionBusy
                   ? const SizedBox(width: 16, height: 16,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: Colors.white))
@@ -721,6 +788,25 @@ class _OngoingCardState extends State<_OngoingCard> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14)),
               ),
+            )
+                : ElevatedButton.icon(
+              // "Start Job" — only when status == 'accepted'
+              onPressed: _actionBusy ? null : _startJob,
+              icon: _actionBusy
+                  ? const SizedBox(width: 16, height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.play_circle_rounded, size: 20),
+              label: Text(widget.isHindi ? 'काम शुरू करें' : 'Start Job',
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w700)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _P.purple,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
             ),
           ),
         ),
@@ -729,32 +815,158 @@ class _OngoingCardState extends State<_OngoingCard> {
   }
 }
 
-// ── Pending list ──────────────────────────────────────────────────────────
-class _PendingList extends StatelessWidget {
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX 4 — UPCOMING JOBS SECTION
+// Query: helperId == uid AND status == 'accepted' AND scheduledAt > now
+// Shown between _OngoingJobSection and _PendingList
+// ═══════════════════════════════════════════════════════════════════════════
+class _UpcomingJobsSection extends StatelessWidget {
+  final String uid;
+  final bool isHindi;
+  const _UpcomingJobsSection({required this.uid, required this.isHindi});
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid.isEmpty) return const SizedBox.shrink();
+    final now = Timestamp.now();
+    // REQUIRES COMPOSITE INDEX: helperId ASC + status ASC + scheduledAt ASC
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .where('helperId', isEqualTo: uid)
+          .where('status', isEqualTo: _Status.accepted)
+          .where('scheduledAt', isGreaterThan: now)
+          .orderBy('scheduledAt')
+          .snapshots(),
+      builder: (ctx, snap) {
+        if (!snap.hasData || snap.data!.docs.isEmpty) return const SizedBox.shrink();
+        final docs = snap.data!.docs;
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _SecHead(
+            title: isHindi ? 'आगामी काम' : 'Upcoming Jobs',
+            badge: '${docs.length}',
+          ),
+          const SizedBox(height: 12),
+          ...docs.map((doc) {
+            final d = doc.data() as Map<String, dynamic>;
+            final svc = d['serviceName'] as String? ?? 'Service';
+            final addr = d['address'] as String? ?? '';
+            final amount = _helperAmount(d);
+            final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate().toLocal();
+            final dateStr = scheduledAt != null
+                ? DateFormat('EEE, d MMM').format(scheduledAt)
+                : '';
+            final timeStr = scheduledAt != null
+                ? DateFormat('h:mm a').format(scheduledAt)
+                : '';
+
+            return Container(
+              key: ValueKey(doc.id),
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: _P.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _P.border),
+                boxShadow: [BoxShadow(
+                    color: Colors.black.withOpacity(0.03),
+                    blurRadius: 8, offset: const Offset(0, 2))],
+              ),
+              child: Row(children: [
+                Container(
+                  width: 44, height: 44,
+                  decoration: BoxDecoration(
+                      color: _P.purple.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(12)),
+                  child: const Icon(Icons.event_available_rounded,
+                      color: _P.purple, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(svc,
+                      style: const TextStyle(
+                          color: _P.t1, fontSize: 14, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text('$dateStr · $timeStr',
+                      style: const TextStyle(
+                          color: _P.purple, fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                  if (addr.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(addr,
+                        style: const TextStyle(color: _P.t2, fontSize: 11),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ],
+                ])),
+                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Text('₹${amount.toStringAsFixed(0)}',
+                      style: const TextStyle(
+                          color: _P.t1, fontSize: 15, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  _paymentBadge(d['paymentMethod'] as String?),
+                ]),
+              ]),
+            );
+          }),
+          const SizedBox(height: 6),
+        ]);
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX 2 — PENDING LIST (flicker-free with _cached pattern)
+// ═══════════════════════════════════════════════════════════════════════════
+class _PendingList extends StatefulWidget {
   final String uid;
   final bool isHindi;
   final Position? myPos;
-  const _PendingList(
-      {required this.uid, required this.isHindi, this.myPos});
+  const _PendingList({required this.uid, required this.isHindi, this.myPos});
+  @override
+  State<_PendingList> createState() => _PendingListState();
+}
+
+class _PendingListState extends State<_PendingList> {
+  // Cache the last known docs — prevents blank flash between snapshots
+  List<QueryDocumentSnapshot> _cached = [];
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
+      // PageStorageKey preserves scroll position across tab switches
+      key: const PageStorageKey('pending_list'),
       stream: FirebaseFirestore.instance
           .collection('bookings')
-          .where('status', isEqualTo: 'pending')
+          .where('status', isEqualTo: _Status.pending)
           .orderBy('createdAt', descending: true)
           .limit(15)
           .snapshots(),
       builder: (ctx, snap) {
-        if (!snap.hasData || snap.data!.docs.isEmpty) {
-          return _VisibilityCard(isHindi: isHindi);
+        // Update cache only when real data arrives
+        if (snap.hasData && snap.data!.docs.isNotEmpty) {
+          _cached = snap.data!.docs;
         }
+
+        // First ever load with no cached data yet → spinner
+        if (_cached.isEmpty &&
+            snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        // No pending requests
+        if (_cached.isEmpty) return _VisibilityCard(isHindi: widget.isHindi);
+
+        // Render from cache — never flashes blank
         return Column(
-          children: snap.data!.docs.map((doc) => _RequestCard(
+          children: _cached.map((doc) => _RequestCard(
+            key: ValueKey(doc.id),
             bookingId: doc.id,
             data: doc.data() as Map<String, dynamic>,
-            uid: uid, isHindi: isHindi, myPos: myPos,
+            uid: widget.uid,
+            isHindi: widget.isHindi,
+            myPos: widget.myPos,
           )).toList(),
         );
       },
@@ -762,22 +974,86 @@ class _PendingList extends StatelessWidget {
   }
 }
 
-// ── Request card ──────────────────────────────────────────────────────────
-class _RequestCard extends StatelessWidget {
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX 3 + 5 + 6 — REQUEST CARD
+// • No date picker — reads customer's scheduledAt directly
+// • Smart auto-decline timer: only for instant bookings (< 2 hours away)
+// • Shows paymentMethod badge (Cash/UPI)
+// • Accept shows _AcceptConfirmSheet with customer's date
+// ═══════════════════════════════════════════════════════════════════════════
+class _RequestCard extends StatefulWidget {
   final String bookingId, uid;
   final Map<String, dynamic> data;
   final bool isHindi;
   final Position? myPos;
+
   const _RequestCard({
+    super.key,
     required this.bookingId, required this.uid, required this.data,
     required this.isHindi, this.myPos,
   });
 
+  @override
+  State<_RequestCard> createState() => _RequestCardState();
+}
+
+class _RequestCardState extends State<_RequestCard> {
+  // Auto-decline timer — only for instant bookings (scheduledAt within 2 hours)
+  Timer? _countdownTimer;
+  int _secondsLeft = 60;
+  bool _declined = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _maybeStartTimer();
+  }
+
+  void _maybeStartTimer() {
+    final scheduledAt =
+    (widget.data['scheduledAt'] as Timestamp?)?.toDate();
+    final now = DateTime.now();
+
+    // FIX 5: Only start 60s timer for instant bookings (< 2 hours away).
+    // Future-scheduled bookings must NOT be auto-declined.
+    final isInstant = scheduledAt == null ||
+        scheduledAt.difference(now).inHours < 2;
+
+    if (isInstant) {
+      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (!mounted) { t.cancel(); return; }
+        setState(() => _secondsLeft--);
+        if (_secondsLeft <= 0) {
+          t.cancel();
+          _autoDecline();
+        }
+      });
+    }
+  }
+
+  Future<void> _autoDecline() async {
+    if (_declined) return;
+    _declined = true;
+    await FirebaseFirestore.instance
+        .collection('bookings').doc(widget.bookingId).update({
+      'status':      _Status.cancelled,
+      'cancelledBy': 'timeout',
+      'cancelledAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
   String _dist() {
-    final loc = data['userLocation'] as GeoPoint?;
-    if (loc == null || myPos == null) return '';
+    final loc = widget.data['userLocation'] as GeoPoint?;
+    if (loc == null || widget.myPos == null) return '';
     final m = Geolocator.distanceBetween(
-        myPos!.latitude, myPos!.longitude, loc.latitude, loc.longitude);
+        widget.myPos!.latitude, widget.myPos!.longitude,
+        loc.latitude, loc.longitude);
     return m < 1000
         ? '${m.toInt()} m away'
         : '${(m / 1000).toStringAsFixed(1)} km away';
@@ -808,13 +1084,93 @@ class _RequestCard extends StatelessWidget {
     return (Icons.home_repair_service_rounded, _P.purple);
   }
 
+  // FIX 3: Show accept confirmation with CUSTOMER's scheduledAt — no date picker
+  Future<void> _showAcceptConfirm(BuildContext context) async {
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _AcceptConfirmSheet(
+        data: widget.data,
+        isHindi: widget.isHindi,
+      ),
+    );
+    if (confirmed != true) return;
+    if (!context.mounted) return;
+    await _accept(context);
+  }
+
+  // FIX 3: Accept writes status: 'accepted' — scheduledAt is NEVER changed
+  // FIX 7: Also writes notification to customer
+  Future<void> _accept(BuildContext context) async {
+    final auth = context.read<AuthProvider>();
+    final db   = FirebaseFirestore.instance;
+
+    final helperName  = auth.helper?.name ?? '';
+    final helperId    = auth.helper?.uid  ?? '';
+    final svcName     = widget.data['serviceName'] as String? ?? 'Service';
+    final userId      = widget.data['userId'] as String? ?? '';
+    final scheduledAt = (widget.data['scheduledAt'] as Timestamp?)?.toDate();
+    final formatted   = scheduledAt != null
+        ? DateFormat('d MMM yyyy, h:mm a').format(scheduledAt.toLocal())
+        : '';
+
+    final batch = db.batch();
+
+    // Update booking — DO NOT change scheduledAt (set by customer)
+    batch.update(db.collection('bookings').doc(widget.bookingId), {
+      'status':       _Status.accepted,
+      'helperId':     helperId,
+      'helperName':   helperName,
+      'acceptedAt':   FieldValue.serverTimestamp(),
+      'confirmedAt':  FieldValue.serverTimestamp(), // FIX 7
+    });
+
+    // FIX 7: Write notification to customer
+    if (userId.isNotEmpty) {
+      final notifRef = db
+          .collection('notifications').doc(userId)
+          .collection('items').doc();
+      batch.set(notifRef, {
+        'type':      'booking_accepted',
+        'title':     'Booking Confirmed! ✅',
+        'body':      '$helperName has accepted your $svcName booking'
+            '${formatted.isNotEmpty ? " for $formatted" : ""}.',
+        'bookingId': widget.bookingId,
+        'read':      false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+    _countdownTimer?.cancel();
+  }
+
+  Future<void> _decline() async {
+    _countdownTimer?.cancel();
+    await FirebaseFirestore.instance
+        .collection('bookings').doc(widget.bookingId).update({
+      'status':      _Status.cancelled,
+      'cancelledBy': 'helper',
+      'cancelledAt': FieldValue.serverTimestamp(),
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final svc    = data['serviceName'] as String? ?? 'Service';
-    final amount = ((data['amount'] ?? 0) as num).toDouble();
-    final ts     = (data['createdAt'] as Timestamp?)?.toDate();
+    final d      = widget.data;
+    final svc    = d['serviceName'] as String? ?? 'Service';
+    // FIX: read baseAmount only — never platformFee
+    final amount = _helperAmount(d);
+    final ts     = (d['createdAt'] as Timestamp?)?.toDate();
     final dist   = _dist();
     final (icon, color) = _svcIcon(svc);
+    final payMethod = d['paymentMethod'] as String?;
+
+    // FIX 5: timer only for instant bookings
+    final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate();
+    final isInstant = scheduledAt == null ||
+        scheduledAt.difference(DateTime.now()).inHours < 2;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -862,12 +1218,56 @@ class _RequestCard extends StatelessWidget {
                   Text(_ago(ts),
                       style: const TextStyle(color: _P.t3, fontSize: 11)),
               ]),
+              // Scheduled date/time from customer's booking
+              if (scheduledAt != null) ...[
+                const SizedBox(height: 3),
+                Row(children: [
+                  const Icon(Icons.schedule_rounded, size: 11, color: _P.t2),
+                  const SizedBox(width: 3),
+                  Text(
+                    DateFormat('d MMM, h:mm a').format(scheduledAt.toLocal()),
+                    style: const TextStyle(
+                        color: _P.t2, fontSize: 11, fontWeight: FontWeight.w500),
+                  ),
+                ]),
+              ],
             ])),
-            Text('₹${amount.toStringAsFixed(0)}',
-                style: const TextStyle(
-                    color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800)),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text('₹${amount.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                      color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              // FIX 6: payment badge
+              _paymentBadge(payMethod),
+            ]),
           ]),
         ),
+
+        // Countdown bar — only for instant bookings
+        if (isInstant && _secondsLeft > 0 && _secondsLeft <= 60)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(children: [
+              const Icon(Icons.timer_outlined, size: 12, color: _P.amber),
+              const SizedBox(width: 4),
+              Text('Auto-decline in ${_secondsLeft}s',
+                  style: const TextStyle(
+                      color: _P.amber, fontSize: 11, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              SizedBox(
+                width: 120, height: 4,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: _secondsLeft / 60,
+                    backgroundColor: _P.amber.withOpacity(0.15),
+                    valueColor: const AlwaysStoppedAnimation<Color>(_P.amber),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+
         Divider(height: 1, color: _P.border),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -875,7 +1275,7 @@ class _RequestCard extends StatelessWidget {
             Expanded(flex: 3, child: ElevatedButton(
               onPressed: () {
                 HapticFeedback.mediumImpact();
-                _accept(context);
+                _showAcceptConfirm(context);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: _P.green, foregroundColor: Colors.white,
@@ -883,7 +1283,7 @@ class _RequestCard extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(22)),
               ),
-              child: Text(isHindi ? 'स्वीकार करें' : 'ACCEPT',
+              child: Text(widget.isHindi ? 'स्वीकार करें' : 'ACCEPT',
                   style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w800,
                       letterSpacing: 0.6)),
@@ -895,7 +1295,7 @@ class _RequestCard extends StatelessWidget {
                 foregroundColor: _P.t2,
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              child: Text(isHindi ? 'मना करें' : 'DECLINE',
+              child: Text(widget.isHindi ? 'मना करें' : 'DECLINE',
                   style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w600)),
             )),
@@ -904,32 +1304,199 @@ class _RequestCard extends StatelessWidget {
       ]),
     );
   }
+}
 
-  Future<void> _accept(BuildContext context) async {
-    final auth = context.read<AuthProvider>();
-    await FirebaseFirestore.instance
-        .collection('bookings').doc(bookingId).update({
-      'status': 'accepted',
-      'helperId':   auth.helper?.uid,
-      'helperName': auth.helper?.name,
-      'acceptedAt': FieldValue.serverTimestamp(),
-    });
-    if (context.mounted) {
-      Navigator.push(context,
-          SmoothRoute(page: IncomingBookingDetail(bookingId: bookingId)));
-    }
-  }
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX 3 — ACCEPT CONFIRMATION SHEET
+// Shows customer's booked date/time — helper cannot change it.
+// Shows baseAmount only — platformFee is never shown to helper.
+// ═══════════════════════════════════════════════════════════════════════════
+class _AcceptConfirmSheet extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final bool isHindi;
+  const _AcceptConfirmSheet({required this.data, required this.isHindi});
 
-  Future<void> _decline() async {
-    await FirebaseFirestore.instance
-        .collection('bookings').doc(bookingId).update({
-      'status': 'declined',
-      'declinedAt': FieldValue.serverTimestamp(),
-    });
+  @override
+  Widget build(BuildContext context) {
+    final safeB = MediaQuery.of(context).padding.bottom;
+    final svc   = data['serviceName'] as String? ?? 'Service';
+    final addr  = data['address'] as String? ?? '';
+    // Helper only sees baseAmount — platform fee is app revenue (never shown)
+    final amount = _helperAmount(data);
+    final payMethod = data['paymentMethod'] as String?;
+
+    // Read the customer's scheduledAt Timestamp
+    final scheduledAt = (data['scheduledAt'] as Timestamp?)?.toDate().toLocal();
+    final dateStr = scheduledAt != null
+        ? DateFormat('EEEE, d MMMM yyyy').format(scheduledAt)
+        : '—';
+    final timeStr = scheduledAt != null
+        ? DateFormat('h:mm a').format(scheduledAt)
+        : '—';
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: _P.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      padding: EdgeInsets.fromLTRB(24, 0, 24, safeB + 24),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Drag handle
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+                color: const Color(0xFFDEE2E6),
+                borderRadius: BorderRadius.circular(2)),
+          ),
+        ),
+
+        Row(children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+                color: _P.green.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.handshake_rounded,
+                color: _P.green, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(isHindi ? 'बुकिंग स्वीकार करें' : 'Confirm Booking',
+                style: const TextStyle(
+                    color: _P.t1, fontSize: 17, fontWeight: FontWeight.w800)),
+            Text(isHindi ? 'ग्राहक का शेड्यूल' : "Customer's requested schedule",
+                style: const TextStyle(color: _P.t2, fontSize: 12)),
+          ]),
+        ]),
+        const SizedBox(height: 22),
+
+        // Summary card
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F7FF),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _P.border),
+          ),
+          child: Column(children: [
+            _Row(Icons.home_repair_service_rounded, _P.purple,
+                isHindi ? 'सेवा' : 'Service', svc),
+            const SizedBox(height: 12),
+            _Row(Icons.calendar_today_rounded, _P.purple,
+                isHindi ? 'तारीख' : 'Date', dateStr),
+            const SizedBox(height: 12),
+            _Row(Icons.access_time_rounded, _P.purple,
+                isHindi ? 'समय' : 'Time', timeStr),
+            if (addr.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _Row(Icons.location_on_rounded, _P.red,
+                  isHindi ? 'पता' : 'Address', addr),
+            ],
+            const SizedBox(height: 12),
+            Row(children: [
+              Container(
+                width: 32, height: 32,
+                decoration: BoxDecoration(
+                    color: _P.green.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.currency_rupee_rounded,
+                    color: _P.green, size: 16),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(isHindi ? 'भुगतान' : 'Your Payment',
+                    style: const TextStyle(
+                        color: _P.t3, fontSize: 10, fontWeight: FontWeight.w600)),
+                Text('₹${amount.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                        color: _P.green, fontSize: 15,
+                        fontWeight: FontWeight.w800)),
+              ])),
+              _paymentBadge(payMethod),
+            ]),
+          ]),
+        ),
+        const SizedBox(height: 22),
+
+        // Confirm button
+        SizedBox(
+          width: double.infinity, height: 54,
+          child: ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _P.green,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+            ),
+            child: Text(
+              isHindi ? 'पुष्टि करें और स्वीकार करें' : 'Confirm & Accept',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // Decline button
+        SizedBox(
+          width: double.infinity, height: 50,
+          child: OutlinedButton(
+            onPressed: () => Navigator.pop(context, false),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _P.red,
+              side: const BorderSide(color: _P.red),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+            ),
+            child: Text(
+              isHindi ? 'अस्वीकार करें' : 'Decline',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
+      ]),
+    );
   }
 }
 
-// ── Visibility active empty card ──────────────────────────────────────────
+class _Row extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label, value;
+  const _Row(this.icon, this.color, this.label, this.value);
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Container(
+        width: 32, height: 32,
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.10),
+            borderRadius: BorderRadius.circular(8)),
+        child: Icon(icon, color: color, size: 16),
+      ),
+      const SizedBox(width: 12),
+      Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: const TextStyle(
+                color: _P.t3, fontSize: 10, fontWeight: FontWeight.w600)),
+        Text(value,
+            style: const TextStyle(
+                color: _P.t1, fontSize: 13, fontWeight: FontWeight.w600),
+            maxLines: 2, overflow: TextOverflow.ellipsis),
+      ])),
+    ],
+  );
+}
+
+// ── Visibility empty card ─────────────────────────────────────────────────
 class _VisibilityCard extends StatelessWidget {
   final bool isHindi;
   const _VisibilityCard({required this.isHindi});
@@ -1006,6 +1573,97 @@ class _HistoryBtn extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// JOBS TAB — includes _UpcomingJobsSection between Ongoing and Pending
+// ═══════════════════════════════════════════════════════════════════════════
+class _JobsTab extends StatelessWidget {
+  final Position? myPos;
+  final int pendingCount;
+  final VoidCallback? onGoHome;
+  const _JobsTab({this.myPos, required this.pendingCount, this.onGoHome});
+
+  @override
+  Widget build(BuildContext context) {
+    final helper  = context.watch<AuthProvider>().helper;
+    final isHindi = context.watch<LanguageProvider>().isHindi;
+    final uid     = helper?.uid ?? '';
+
+    return Scaffold(
+      backgroundColor: _P.bg,
+      body: CustomScrollView(slivers: [
+        SliverToBoxAdapter(child: _TabHeader(
+          helper: helper,
+          isOnline: helper?.isOnline ?? false,
+          isHindi: isHindi,
+        )),
+        SliverToBoxAdapter(child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: _StatusBanner(
+              helper: helper, count: pendingCount, isHindi: isHindi),
+        )),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 110),
+          sliver: SliverList(delegate: SliverChildListDelegate([
+            // 1. Ongoing/Accepted job card (Firestore-driven)
+            _OngoingJobSection(uid: uid, isHindi: isHindi),
+            // 2. Upcoming accepted jobs (scheduledAt > now)
+            _UpcomingJobsSection(uid: uid, isHindi: isHindi),
+            // 3. Pending requests
+            _SecHead(
+              title: isHindi ? 'नए अनुरोध' : 'Pending Requests',
+              badge: pendingCount > 0 ? '$pendingCount Nearby' : null,
+            ),
+            const SizedBox(height: 12),
+            _PendingList(uid: uid, isHindi: isHindi, myPos: myPos),
+            const SizedBox(height: 22),
+            _HistoryBtn(isHindi: isHindi),
+            const SizedBox(height: 10),
+            _ScheduleShortcutBtn(isHindi: isHindi),
+            const SizedBox(height: 12),
+          ])),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Schedule shortcut button ──────────────────────────────────────────────
+class _ScheduleShortcutBtn extends StatelessWidget {
+  final bool isHindi;
+  const _ScheduleShortcutBtn({required this.isHindi});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: () => Navigator.push(
+        context, MaterialPageRoute(
+        builder: (_) => const ScheduleScreen())),
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+      decoration: BoxDecoration(
+          color: _P.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _P.border)),
+      child: Row(children: [
+        Container(
+          width: 38, height: 38,
+          decoration: BoxDecoration(
+              color: _P.purple.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10)),
+          child: const Icon(Icons.calendar_month_rounded,
+              color: _P.purple, size: 18),
+        ),
+        const SizedBox(width: 12),
+        Expanded(child: Text(
+            isHindi ? 'शेड्यूल देखें' : 'View My Schedule',
+            style: const TextStyle(
+                color: _P.t1, fontSize: 14, fontWeight: FontWeight.w600))),
+        const Icon(Icons.arrow_forward_ios_rounded,
+            size: 12, color: _P.t3),
+      ]),
+    ),
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════════════════
 class _HomeTab extends StatelessWidget {
@@ -1031,7 +1689,9 @@ class _HomeTab extends StatelessWidget {
             _EarningsCard(uid: uid, isHindi: isHindi),
             const SizedBox(height: 14),
             _StatsRow(uid: uid),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
+            _TodayScheduleCard(uid: uid, isHindi: isHindi),
+            const SizedBox(height: 14),
             _WaitingBanner(isHindi: isHindi, onTap: onGoJobs),
             const SizedBox(height: 22),
             _SecHead(title: isHindi ? 'हालिया गतिविधि' : 'Recent Activity'),
@@ -1044,7 +1704,125 @@ class _HomeTab extends StatelessWidget {
   }
 }
 
-// ── Greeting header (Image-1 style) ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX 8 — TODAY SCHEDULE CARD
+// Uses scheduledAt Timestamp range query — NOT the phantom 'scheduledDate' field
+// Only shows accepted + ongoing bookings
+// ═══════════════════════════════════════════════════════════════════════════
+class _TodayScheduleCard extends StatelessWidget {
+  final String uid;
+  final bool isHindi;
+  const _TodayScheduleCard({required this.uid, required this.isHindi});
+
+  @override
+  Widget build(BuildContext context) {
+    final now   = DateTime.now();
+    // Timestamp range for today
+    final start = Timestamp.fromDate(DateTime(now.year, now.month, now.day));
+    final end   = Timestamp.fromDate(DateTime(now.year, now.month, now.day, 23, 59, 59));
+
+    // REQUIRES COMPOSITE INDEX: helperId ASC + scheduledAt ASC + status (filter in-memory)
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .where('helperId', isEqualTo: uid)
+          .where('scheduledAt', isGreaterThanOrEqualTo: start)
+          .where('scheduledAt', isLessThanOrEqualTo: end)
+          .snapshots(),
+      builder: (ctx, snap) {
+        // Filter to only accepted + ongoing (exclude pending, completed, cancelled)
+        final docs = (snap.data?.docs ?? []).where((doc) {
+          final s = (doc.data() as Map)['status'] as String? ?? '';
+          return s == _Status.accepted || s == _Status.ongoing;
+        }).toList();
+
+        final count = docs.length;
+
+        return GestureDetector(
+          onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const ScheduleScreen())),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  _P.purple.withOpacity(0.08),
+                  _P.purple.withOpacity(0.03),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _P.purple.withOpacity(0.20)),
+            ),
+            child: Row(children: [
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                    color: _P.purple.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(14)),
+                child: const Icon(Icons.calendar_today_rounded,
+                    color: _P.purple, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isHindi ? 'आज का शेड्यूल' : "Today's Schedule",
+                      style: const TextStyle(
+                          color: _P.t1, fontSize: 14,
+                          fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 3),
+                    if (count == 0)
+                      Text(
+                        isHindi ? 'आज कोई काम नहीं है' : 'No jobs scheduled today',
+                        style: const TextStyle(color: _P.t2, fontSize: 12),
+                      )
+                    else ...[
+                      Text(
+                        '$count ${isHindi ? 'काम शेड्यूल' : 'job${count > 1 ? "s" : ""} scheduled'}',
+                        style: const TextStyle(
+                            color: _P.purple, fontSize: 12,
+                            fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 5),
+                      // Time chips — extract from scheduledAt Timestamp
+                      Wrap(spacing: 6, children: docs.take(3).map((doc) {
+                        final scheduledAt =
+                        ((doc.data() as Map)['scheduledAt'] as Timestamp?)
+                            ?.toDate().toLocal();
+                        final t = scheduledAt != null
+                            ? DateFormat('h:mm a').format(scheduledAt)
+                            : '';
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                              color: _P.purple.withOpacity(0.10),
+                              borderRadius: BorderRadius.circular(20)),
+                          child: Text(t,
+                              style: const TextStyle(
+                                  color: _P.purple, fontSize: 10,
+                                  fontWeight: FontWeight.w700)),
+                        );
+                      }).toList()),
+                    ],
+                  ])),
+              const Icon(Icons.arrow_forward_ios_rounded,
+                  size: 13, color: _P.purple),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Greeting header ───────────────────────────────────────────────────────
 class _GreetingHeader extends StatefulWidget {
   final HelperModel? helper;
   const _GreetingHeader({required this.helper});
@@ -1077,106 +1855,171 @@ class _GreetingHeaderState extends State<_GreetingHeader>
     final h = DateTime.now().hour;
     if (h < 12) return 'Good Morning';
     if (h < 17) return 'Good Afternoon';
-    if (h < 20) return 'Good Evening';
-    return 'Good Night';
-  }
-
-  static String _emoji() {
-    final h = DateTime.now().hour;
-    if (h < 12) return '☀️';
-    if (h < 17) return '🌤';
-    if (h < 20) return '🌆';
-    return '🌙';
+    return 'Good Evening';
   }
 
   @override
   Widget build(BuildContext context) {
-    final h        = widget.helper;
-    final isOnline = h?.isOnline ?? false;
-    final first    = (h?.name ?? 'Helper').split(' ').first;
+    final helper   = widget.helper;
+    final isOnline = helper?.isOnline ?? false;
+    final isHindi  = context.watch<LanguageProvider>().isHindi;
 
     return Container(
       padding: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top + 20,
-        bottom: 28, left: 20, right: 20,
+        top: MediaQuery.of(context).padding.top + 12,
+        bottom: 20, left: 16, right: 16,
       ),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: [_P.indigo, Color(0xFF4C1D95), _P.purple],
+          colors: [_P.indigo, _P.violet, _P.purple],
         ),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Welcome pill
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-            decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.25))),
-            child: const Text('WELCOME BACK',
-                style: TextStyle(color: Colors.white, fontSize: 9,
-                    fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-          ),
-          const Spacer(),
-          // Avatar + pulse
-          Stack(clipBehavior: Clip.none, children: [
-            Container(
-              width: 50, height: 50,
-              decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.18),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                      color: Colors.white.withOpacity(0.35), width: 2)),
-              child: Center(child: Text(h?.initials ?? 'SK',
-                  style: const TextStyle(color: Colors.white,
-                      fontSize: 15, fontWeight: FontWeight.w800))),
-            ),
-            if (isOnline)
-              Positioned(bottom: 0, right: 0,
-                child: AnimatedBuilder(animation: _a, builder: (_, __) =>
-                    Container(
-                      width: 14, height: 14,
+        Row(children: [
+          Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(isHindi ? 'नमस्ते 👋' : '${_greet()} 👋',
+                style: const TextStyle(
+                    color: Colors.white70, fontSize: 13)),
+            Text(helper?.name ?? 'Helper',
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 20,
+                    fontWeight: FontWeight.w800)),
+          ])),
+          AnimatedBuilder(
+            animation: _a,
+            builder: (_, __) => Opacity(
+              opacity: isOnline ? _a.value : 0.4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 11, vertical: 5),
+                decoration: BoxDecoration(
+                    color: (isOnline
+                        ? AppColors.onlineGreen
+                        : Colors.white24),
+                    borderRadius: BorderRadius.circular(20)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(width: 6, height: 6,
                       decoration: BoxDecoration(
-                          color: AppColors.onlineGreen,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                          boxShadow: [BoxShadow(
-                              color: AppColors.onlineGreen
-                                  .withOpacity(_a.value * 0.8),
-                              blurRadius: 8, spreadRadius: 2)]),
-                    )),
+                          color: isOnline
+                              ? Colors.white
+                              : Colors.white38,
+                          shape: BoxShape.circle)),
+                  const SizedBox(width: 5),
+                  Text(isOnline
+                      ? (isHindi ? 'ऑनलाइन' : 'ONLINE')
+                      : (isHindi ? 'ऑफलाइन' : 'OFFLINE'),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10, fontWeight: FontWeight.w700)),
+                ]),
               ),
-          ]),
+            ),
+          ),
+          const SizedBox(width: 8),
+          const NotificationBell(isDark: false),
         ]),
-        const SizedBox(height: 20),
-        Text('${_greet()} ${_emoji()}, $first',
-            style: const TextStyle(color: Colors.white,
-                fontSize: 26, fontWeight: FontWeight.w800, height: 1.2)),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         // Location pill
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-          decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: Colors.white.withOpacity(0.22))),
-          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.location_on_rounded, color: Colors.white70, size: 13),
-            SizedBox(width: 5),
-            Text('Surat, Gujarat',
-                style: TextStyle(
-                    color: Colors.white, fontSize: 12,
-                    fontWeight: FontWeight.w600)),
-            SizedBox(width: 4),
-            Icon(Icons.keyboard_arrow_down_rounded,
-                color: Colors.white60, size: 15),
-          ]),
-        ),
+        if (helper != null)
+          StreamBuilder<DocumentSnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('helpers').doc(helper.uid).snapshots(),
+            builder: (ctx, snap) {
+              final d = snap.data?.data() as Map<String, dynamic>? ?? {};
+              final area = (d['area'] as String?)?.isNotEmpty == true
+                  ? d['area'] as String
+                  : helper.area;
+              final display = area.isNotEmpty ? area : 'Surat, Gujarat';
+
+              return GestureDetector(
+                onTap: () {
+                  if (isOnline) {
+                    Navigator.push(context,
+                        MaterialPageRoute(
+                            builder: (_) => const HelperLocationScreen()));
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: const Row(children: [
+                        Icon(Icons.lock_rounded,
+                            color: Colors.white, size: 15),
+                        SizedBox(width: 8),
+                        Text('Go ONLINE first to update location',
+                            style: TextStyle(color: Colors.white)),
+                      ]),
+                      backgroundColor: _P.amber,
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      margin: const EdgeInsets.all(12),
+                      duration: const Duration(seconds: 2),
+                    ));
+                  }
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 13, vertical: 7),
+                  decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(
+                          isOnline ? 0.18 : 0.10),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                          color: Colors.white.withOpacity(0.22))),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                      isOnline
+                          ? Icons.location_on_rounded
+                          : Icons.location_off_rounded,
+                      color: Colors.white70, size: 13,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(display,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 12,
+                            fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    const SizedBox(width: 5),
+                    Icon(
+                      isOnline
+                          ? Icons.edit_rounded
+                          : Icons.lock_rounded,
+                      color: Colors.white60, size: 11,
+                    ),
+                  ]),
+                ),
+              );
+            },
+          )
+        else
+          const _StaticLocationPill(isOnline: false),
       ]),
     );
   }
+}
+
+class _StaticLocationPill extends StatelessWidget {
+  final bool isOnline;
+  const _StaticLocationPill({required this.isOnline});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+    decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withOpacity(0.22))),
+    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(Icons.location_on_rounded, color: Colors.white70, size: 13),
+      SizedBox(width: 5),
+      Text('Surat, Gujarat',
+          style: TextStyle(
+              color: Colors.white, fontSize: 12,
+              fontWeight: FontWeight.w600)),
+    ]),
+  );
 }
 
 // ── Online toggle card ────────────────────────────────────────────────────
@@ -1220,7 +2063,7 @@ class _ToggleCard extends StatelessWidget {
   }
 }
 
-// ── Today earnings + goal ring ────────────────────────────────────────────
+// ── Today earnings card ────────────────────────────────────────────────────
 class _EarningsCard extends StatelessWidget {
   final String uid;
   final bool isHindi;
@@ -1230,21 +2073,23 @@ class _EarningsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     if (uid.isEmpty) return const SizedBox.shrink();
     final today = DateTime.now();
-    final start = DateTime(today.year, today.month, today.day);
+    final start = Timestamp.fromDate(DateTime(today.year, today.month, today.day));
     const goal  = 1500.0;
 
+    // REQUIRES COMPOSITE INDEX: helperId ASC + status ASC + completedAt ASC
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance.collection('bookings')
           .where('helperId', isEqualTo: uid)
-          .where('status', isEqualTo: 'completed')
-          .where('createdAt', isGreaterThanOrEqualTo: start)
+          .where('status', isEqualTo: _Status.completed)
+          .where('completedAt', isGreaterThanOrEqualTo: start)
           .snapshots(),
       builder: (ctx, snap) {
         double total = 0; int jobs = 0;
         if (snap.hasData) {
           for (final d in snap.data!.docs) {
             final m = d.data() as Map<String, dynamic>;
-            total += ((m['amount'] ?? 0) as num).toDouble();
+            // Helper only sees baseAmount
+            total += _helperAmount(m);
             jobs++;
           }
         }
@@ -1345,7 +2190,6 @@ class _RingPainter extends CustomPainter {
           -math.pi / 2, 2 * math.pi * pct, false, fill);
     }
   }
-
   @override
   bool shouldRepaint(_RingPainter o) => o.pct != pct;
 }
@@ -1365,9 +2209,9 @@ class _StatsRow extends StatelessWidget {
         double rating = 0; int reviews = 0, done = 0;
         if (snap.hasData && snap.data!.exists) {
           final d = snap.data!.data() as Map<String, dynamic>? ?? {};
-          rating  = ((d['rating'] ?? 0) as num).toDouble();
-          reviews = ((d['totalReviews'] ?? 0) as num).toInt();
-          done    = ((d['completedJobs'] ?? 0) as num).toInt();
+          rating  = _safeDouble(d['rating']);
+          reviews = _safeInt(d['totalReviews']);
+          done    = _safeInt(d['completedJobs'] ?? d['totalJobs']);
         }
         return Row(children: [
           Expanded(child: _StatChip(
@@ -1423,7 +2267,7 @@ class _StatChip extends StatelessWidget {
   );
 }
 
-// ── Waiting banner (taps to Jobs) ─────────────────────────────────────────
+// ── Waiting banner ─────────────────────────────────────────────────────────
 class _WaitingBanner extends StatelessWidget {
   final bool isHindi;
   final VoidCallback? onTap;
@@ -1434,7 +2278,7 @@ class _WaitingBanner extends StatelessWidget {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('bookings')
-          .where('status', isEqualTo: 'pending')
+          .where('status', isEqualTo: _Status.pending)
           .snapshots(),
       builder: (ctx, snap) {
         final n = snap.data?.docs.length ?? 0;
@@ -1492,12 +2336,12 @@ class _ActivityList extends StatelessWidget {
   const _ActivityList({required this.uid});
 
   static (IconData, Color) _meta(String s) {
-    switch (s.toLowerCase()) {
-      case 'completed':   return (Icons.check_circle_rounded,  _P.green);
-      case 'accepted':    return (Icons.handshake_rounded,     _P.purple);
-      case 'in_progress': return (Icons.play_circle_rounded,   AppColors.onlineGreen);
-      case 'pending':     return (Icons.pending_rounded,       _P.amber);
-      default:            return (Icons.cancel_rounded,        AppColors.danger);
+    switch (s) {
+      case _Status.completed: return (Icons.check_circle_rounded, _P.green);
+      case _Status.accepted:  return (Icons.handshake_rounded, _P.purple);
+      case _Status.ongoing:   return (Icons.play_circle_rounded, AppColors.onlineGreen);
+      case _Status.pending:   return (Icons.pending_rounded, _P.amber);
+      default:                return (Icons.cancel_rounded, AppColors.danger);
     }
   }
 
@@ -1519,7 +2363,7 @@ class _ActivityList extends StatelessWidget {
           .limit(6)
           .snapshots(),
       builder: (ctx, snap) {
-        if (!snap.hasData || snap.data!.docs.isEmpty) {
+        if (!snap.hasData) {
           return Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -1530,6 +2374,18 @@ class _ActivityList extends StatelessWidget {
                 style: TextStyle(color: _P.t2, fontSize: 13))),
           );
         }
+        if (snap.data!.docs.isEmpty) {
+          return Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+                color: _P.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: _P.border)),
+            child: const Center(child: Text('No activity yet',
+                style: TextStyle(color: _P.t2, fontSize: 13))),
+          );
+        }
+
         return Container(
           decoration: BoxDecoration(
               color: _P.white,
@@ -1538,55 +2394,73 @@ class _ActivityList extends StatelessWidget {
               boxShadow: [BoxShadow(
                   color: Colors.black.withOpacity(0.03),
                   blurRadius: 8, offset: const Offset(0, 2))]),
-          child: Column(children: snap.data!.docs.asMap().entries.map((e) {
-            final d      = e.value.data() as Map<String, dynamic>;
-            final status = d['status'] as String? ?? 'pending';
-            final svc    = d['serviceName'] as String? ?? 'Service';
-            final amt    = ((d['amount'] ?? 0) as num).toDouble();
-            final ts     = (d['createdAt'] as Timestamp?)?.toDate();
-            final isLast = e.key == snap.data!.docs.length - 1;
-            final (icon, color) = _meta(status);
-            return Column(children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 11),
-                child: Row(children: [
-                  Container(width: 36, height: 36,
-                      decoration: BoxDecoration(
-                          color: color.withOpacity(0.10),
-                          borderRadius: BorderRadius.circular(10)),
-                      child: Icon(icon, color: color, size: 16)),
-                  const SizedBox(width: 12),
-                  Expanded(child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(svc,
-                            style: const TextStyle(
-                                color: _P.t1, fontSize: 13,
-                                fontWeight: FontWeight.w600)),
-                        Text(status.toUpperCase(),
-                            style: const TextStyle(
-                                color: _P.t3, fontSize: 9,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.5)),
-                      ])),
-                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    Text(status == 'completed'
-                        ? '+₹${amt.toStringAsFixed(0)}'
-                        : '₹${amt.toStringAsFixed(0)}',
-                        style: TextStyle(
-                            color: status == 'completed' ? _P.green : _P.t2,
-                            fontSize: 13, fontWeight: FontWeight.w700)),
-                    if (ts != null)
-                      Text(_ago(ts),
-                          style: const TextStyle(color: _P.t3, fontSize: 10)),
-                  ]),
+          child: Column(
+            children: snap.data!.docs.asMap().entries.map((e) {
+              final doc    = e.value;
+              final d      = doc.data() as Map<String, dynamic>;
+              final status = d['status'] as String? ?? _Status.pending;
+              final svc    = d['serviceName'] as String? ?? 'Service';
+              // Helper only sees baseAmount
+              final amt    = _helperAmount(d);
+              final ts     = (d['createdAt'] as Timestamp?)?.toDate();
+              final isLast = e.key == snap.data!.docs.length - 1;
+              final (icon, color) = _meta(status);
+
+              return KeyedSubtree(
+                key: ValueKey(doc.id),
+                child: Column(children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 11),
+                    child: Row(children: [
+                      Container(
+                          width: 36, height: 36,
+                          decoration: BoxDecoration(
+                              color: color.withOpacity(0.10),
+                              borderRadius: BorderRadius.circular(10)),
+                          child: Icon(icon, color: color, size: 16)),
+                      const SizedBox(width: 12),
+                      Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(svc,
+                                style: const TextStyle(
+                                    color: _P.t1, fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                            Text(status.toUpperCase(),
+                                style: const TextStyle(
+                                    color: _P.t3, fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.5)),
+                          ])),
+                      Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                                status == _Status.completed
+                                    ? '+₹${amt.toStringAsFixed(0)}'
+                                    : '₹${amt.toStringAsFixed(0)}',
+                                style: TextStyle(
+                                    color: status == _Status.completed
+                                        ? _P.green
+                                        : _P.t2,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700)),
+                            if (ts != null)
+                              Text(_ago(ts),
+                                  style: const TextStyle(
+                                      color: _P.t3, fontSize: 10)),
+                          ]),
+                    ]),
+                  ),
+                  if (!isLast)
+                    Divider(
+                        height: 1, color: _P.div,
+                        indent: 14, endIndent: 14),
                 ]),
-              ),
-              if (!isLast)
-                Divider(height: 1, color: _P.div, indent: 14, endIndent: 14),
-            ]);
-          }).toList()),
+              );
+            }).toList(),
+          ),
         );
       },
     );
@@ -1643,8 +2517,7 @@ class _Chip extends StatelessWidget {
   );
 }
 
-// ─── Online toggle button — locked until profile complete + KYC approved ────
-// ─── Online toggle button — locked until profile complete + KYC approved ────
+// ─── Online toggle button ─────────────────────────────────────────────────
 class _OnlineToggleBtn extends StatelessWidget {
   final HelperModel? helper;
   final bool isHindi, isOnline;
@@ -1652,7 +2525,6 @@ class _OnlineToggleBtn extends StatelessWidget {
       {required this.helper, required this.isHindi, required this.isOnline});
 
   bool _canGoOnline(Map<String, dynamic> d) {
-    // ✅ FIX: Check BOTH status=='approved' OR kycStatus=='approved'
     final kycApproved = helper?.isApproved ?? false;
     if (!kycApproved) return false;
     final checks = [
@@ -1662,8 +2534,8 @@ class _OnlineToggleBtn extends StatelessWidget {
       (helper?.services ?? []).isNotEmpty,
       (d['serviceType'] as String? ?? '').isNotEmpty,
       (d['description'] as String? ?? '').isNotEmpty,
-      (d['experience']  as String? ?? '').isNotEmpty,
-      ((d['pricePerVisit'] ?? 0) as num) > 0,
+      _safeDouble(d['experience']) > 0,
+      _safeDouble(d['pricePerVisit']) > 0,
       (d['skills'] as List? ?? []).isNotEmpty,
     ];
     return checks.every((b) => b);
@@ -1737,7 +2609,7 @@ class _OnlineToggleBtn extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// KYC STATUS SCREENS (unchanged logic, light-theme only)
+// KYC STATUS SCREENS
 // ═══════════════════════════════════════════════════════════════════════════
 class _KycPending extends StatelessWidget {
   final HelperModel helper;
@@ -1822,7 +2694,6 @@ class _KycInactive extends StatelessWidget {
       action: null);
 }
 
-// ── KYC shell ─────────────────────────────────────────────────────────────
 class _KycShell extends StatelessWidget {
   final HelperModel helper;
   final Color color;
@@ -1841,7 +2712,6 @@ class _KycShell extends StatelessWidget {
     backgroundColor: _P.bg,
     body: SafeArea(child: Padding(padding: const EdgeInsets.all(24),
       child: Column(children: [
-        // top bar
         Row(children: [
           Container(width: 44, height: 44,
               decoration: BoxDecoration(

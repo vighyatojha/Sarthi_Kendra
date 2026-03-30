@@ -1,4 +1,13 @@
 // lib/screens/jobs/job_history_screen.dart
+//
+// FIX 9 APPLIED:
+//  • _Filter.active renamed → _Filter.upcoming
+//  • "Upcoming" tab = status=='accepted' AND scheduledAt > now (in-memory)
+//  • Grouping by scheduledAt Timestamp (formatted 'MMMM yyyy'),
+//    falls back to createdAt only if scheduledAt is null
+//  • Summary "Earned" chip uses baseAmount only — platform fee never shown to helper
+//  • _JobCard._statusInfo: 'active' replaced with 'accepted' + 'ongoing'
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
@@ -7,7 +16,9 @@ import 'package:intl/intl.dart';
 import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 
-enum _Filter { all, completed, accepted, declined }
+// FIX 9 — "active" tab renamed to "upcoming"
+// Unified statuses: pending | accepted | ongoing | completed | cancelled
+enum _Filter { all, completed, upcoming, cancelled }
 
 class JobHistoryScreen extends StatefulWidget {
   const JobHistoryScreen({super.key});
@@ -17,15 +28,6 @@ class JobHistoryScreen extends StatefulWidget {
 
 class _JobHistoryScreenState extends State<JobHistoryScreen> {
   _Filter _filter = _Filter.all;
-
-  String? get _statusFilter {
-    switch (_filter) {
-      case _Filter.completed: return 'completed';
-      case _Filter.accepted:  return 'accepted';
-      case _Filter.declined:  return 'declined';
-      case _Filter.all:       return null;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -70,11 +72,12 @@ class _JobHistoryScreenState extends State<JobHistoryScreen> {
   }
 
   Widget _buildFilterBar(bool isDark) {
+    // FIX 9 — "Active" tab replaced with "Upcoming"
     final filters = [
       (_Filter.all,       'All'),
       (_Filter.completed, 'Completed'),
-      (_Filter.accepted,  'Accepted'),
-      (_Filter.declined,  'Declined'),
+      (_Filter.upcoming,  'Upcoming'),   // was 'Active'
+      (_Filter.cancelled, 'Cancelled'),
     ];
     return Container(
       height: 46,
@@ -114,15 +117,14 @@ class _JobHistoryScreenState extends State<JobHistoryScreen> {
   Widget _buildList(String uid, bool isDark) {
     if (uid.isEmpty) return _empty(isDark);
 
-    Query query = FirebaseFirestore.instance
+    // Base query: helperId + orderBy createdAt to avoid composite index.
+    // All status + date filtering is done in-memory below.
+    // REQUIRES INDEX: helperId ASC (single field — already exists by default)
+    final query = FirebaseFirestore.instance
         .collection('bookings')
         .where('helperId', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
-        .limit(50);
-
-    if (_statusFilter != null) {
-      query = query.where('status', isEqualTo: _statusFilter);
-    }
+        .limit(100);
 
     return StreamBuilder<QuerySnapshot>(
       stream: query.snapshots(),
@@ -131,14 +133,47 @@ class _JobHistoryScreenState extends State<JobHistoryScreen> {
           return const Center(child: CircularProgressIndicator(
               color: AppColors.brandPurple));
         }
-        final docs = snap.data?.docs ?? [];
+
+        var docs = snap.data?.docs ?? [];
+        final now = DateTime.now();
+
+        // FIX 9 — in-memory filter based on selected tab
+        switch (_filter) {
+          case _Filter.completed:
+            docs = docs.where((doc) {
+              final d = doc.data() as Map<String, dynamic>;
+              return (d['status'] as String? ?? '') == 'completed';
+            }).toList();
+          case _Filter.cancelled:
+            docs = docs.where((doc) {
+              final d = doc.data() as Map<String, dynamic>;
+              return (d['status'] as String? ?? '') == 'cancelled';
+            }).toList();
+          case _Filter.upcoming:
+          // Upcoming = status=='accepted' AND scheduledAt is in the future
+            docs = docs.where((doc) {
+              final d           = doc.data() as Map<String, dynamic>;
+              final status      = d['status'] as String? ?? '';
+              final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate();
+              return status == 'accepted' &&
+                  scheduledAt != null &&
+                  scheduledAt.isAfter(now);
+            }).toList();
+          case _Filter.all:
+            break; // no filter
+        }
+
         if (docs.isEmpty) return _empty(isDark);
 
-        // Group by month
+        // FIX 9 — group by scheduledAt Timestamp (formatted 'MMMM yyyy').
+        // Falls back to createdAt only when scheduledAt is null.
         final Map<String, List<QueryDocumentSnapshot>> grouped = {};
         for (final doc in docs) {
           final d  = doc.data() as Map<String, dynamic>;
-          final ts = (d['createdAt'] as Timestamp?)?.toDate();
+          // Use scheduledAt (when service happens) not createdAt (when customer booked)
+          final scheduledTs = (d['scheduledAt'] as Timestamp?)?.toDate();
+          final fallbackTs  = (d['createdAt']   as Timestamp?)?.toDate();
+          final ts = scheduledTs ?? fallbackTs;
           final key = ts != null
               ? DateFormat('MMMM yyyy').format(ts)
               : 'Earlier';
@@ -148,19 +183,19 @@ class _JobHistoryScreenState extends State<JobHistoryScreen> {
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
           children: [
-            // Summary chips
             _SummaryBar(docs: docs, isDark: isDark),
             const SizedBox(height: 16),
-            // Grouped list
             ...grouped.entries.expand((entry) => [
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Text(entry.key,
                     style: TextStyle(
                         color:    isDark ? AppColors.textSoftDark : AppColors.textSoftLight,
-                        fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+                        fontSize: 11, fontWeight: FontWeight.w700,
+                        letterSpacing: 1.2)),
               ),
-              ...entry.value.map((doc) => _JobCard(doc: doc, isDark: isDark)),
+              ...entry.value.map((doc) =>
+                  _JobCard(key: ValueKey(doc.id), doc: doc, isDark: isDark)),
               const SizedBox(height: 8),
             ]),
           ],
@@ -174,7 +209,8 @@ class _JobHistoryScreenState extends State<JobHistoryScreen> {
       Container(
           width: 72, height: 72,
           decoration: BoxDecoration(
-              color:  AppColors.brandPurple.withOpacity(0.1), shape: BoxShape.circle),
+              color:  AppColors.brandPurple.withOpacity(0.1),
+              shape: BoxShape.circle),
           child: const Icon(Icons.work_history_rounded,
               color: AppColors.brandPurple, size: 34)),
       const SizedBox(height: 16),
@@ -183,7 +219,7 @@ class _JobHistoryScreenState extends State<JobHistoryScreen> {
               color:      isDark ? Colors.white : AppColors.textDarkLight,
               fontSize:   16, fontWeight: FontWeight.w600)),
       const SizedBox(height: 6),
-      Text('Your completed jobs will appear here',
+      Text('Your jobs will appear here',
           style: TextStyle(
               color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
               fontSize: 13)),
@@ -191,6 +227,9 @@ class _JobHistoryScreenState extends State<JobHistoryScreen> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUMMARY BAR
+// ─────────────────────────────────────────────────────────────────────────────
 class _SummaryBar extends StatelessWidget {
   final List<QueryDocumentSnapshot> docs;
   final bool isDark;
@@ -198,15 +237,16 @@ class _SummaryBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    int completed = 0; int declined = 0; double total = 0;
+    int completed = 0; double earned = 0;
     for (final doc in docs) {
       final d = doc.data() as Map<String, dynamic>;
       final s = d['status'] as String? ?? '';
       if (s == 'completed') {
         completed++;
-        total += ((d['amount'] ?? 0) as num).toDouble();
+        // FIX 9 — Earned uses baseAmount ONLY. Platform fee is app revenue,
+        // never shown to the helper.
+        earned += (d['baseAmount'] as num?)?.toDouble() ?? 0.0;
       }
-      if (s == 'declined') declined++;
     }
     return Row(children: [
       Expanded(child: _SummaryChip(
@@ -218,7 +258,7 @@ class _SummaryBar extends StatelessWidget {
           color: AppColors.success, isDark: isDark)),
       const SizedBox(width: 8),
       Expanded(child: _SummaryChip(
-          label: 'Earned', value: '₹${total.toStringAsFixed(0)}',
+          label: 'Earned', value: '₹${earned.toStringAsFixed(0)}',
           color: AppColors.warning, isDark: isDark)),
     ]);
   }
@@ -226,8 +266,8 @@ class _SummaryBar extends StatelessWidget {
 
 class _SummaryChip extends StatelessWidget {
   final String label, value;
-  final Color color;
-  final bool isDark;
+  final Color  color;
+  final bool   isDark;
   const _SummaryChip({
     required this.label, required this.value,
     required this.color, required this.isDark});
@@ -253,23 +293,39 @@ class _SummaryChip extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// JOB CARD
+// ─────────────────────────────────────────────────────────────────────────────
 class _JobCard extends StatelessWidget {
   final QueryDocumentSnapshot doc;
   final bool isDark;
-  const _JobCard({required this.doc, required this.isDark});
+  const _JobCard({super.key, required this.doc, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
-    final d       = doc.data() as Map<String, dynamic>;
-    final status  = (d['status']      as String?) ?? 'pending';
-    final svc     = (d['serviceName'] as String?) ?? 'Service';
-    final user    = (d['userName']    as String?) ?? 'Customer';
-    final amount  = ((d['amount']     ?? 0) as num).toDouble();
-    final ts      = (d['createdAt']   as Timestamp?)?.toDate();
+    final d = doc.data() as Map<String, dynamic>;
+
+    final status      = (d['status']       as String?) ?? 'pending';
+    final svc         = (d['serviceName']  as String?) ?? 'Service';
+    final category    = (d['categoryName'] as String?) ?? '';
+    final bookingCode = (d['bookingCode']  as String?)
+        ?? doc.id.substring(0, 8).toUpperCase();
+    final helperName  = (d['helperName']   as String?) ?? '';
+
+    // FIX 9 — baseAmount = helper's payment. Platform fee never shown.
+    final amount = (d['baseAmount']  as num?)?.toDouble()
+        ?? (d['totalAmount'] as num?)?.toDouble()
+        ?? 0.0;
+
+    // FIX 9 — display scheduledAt (service date), fallback to createdAt
+    final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate();
+    final createdAt   = (d['createdAt']   as Timestamp?)?.toDate();
+    final displayTime = scheduledAt ?? createdAt;
 
     final (color, icon, label) = _statusInfo(status);
 
     return Container(
+      key:    ValueKey(doc.id),
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color:        isDark ? AppColors.cardDark : Colors.white,
@@ -280,6 +336,7 @@ class _JobCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Row(children: [
+          // Service icon
           Container(
             width: 42, height: 42,
             decoration: BoxDecoration(
@@ -289,26 +346,43 @@ class _JobCard extends StatelessWidget {
             child: Icon(icon, color: color, size: 22),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(svc, style: TextStyle(
                 color:      isDark ? Colors.white : AppColors.textDarkLight,
                 fontSize:   14, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text(user, style: TextStyle(
-                color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-                fontSize: 12)),
-            if (ts != null)
-              Text(DateFormat('d MMM yyyy, h:mm a').format(ts),
+            if (category.isNotEmpty || helperName.isNotEmpty)
+              Text(
+                helperName.isNotEmpty ? helperName : category,
+                style: TextStyle(
+                    color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
+                    fontSize: 12),
+              ),
+            const SizedBox(height: 2),
+            Text('#$bookingCode',
+                style: TextStyle(
+                    color:    isDark ? AppColors.textSoftDark : AppColors.textSoftLight,
+                    fontSize: 11)),
+            // FIX 9 — show scheduledAt (service date) not createdAt
+            if (displayTime != null)
+              Text(
+                  DateFormat('d MMM yyyy, h:mm a').format(
+                      displayTime.toLocal()),
                   style: TextStyle(
                       color:    isDark ? AppColors.textSoftDark : AppColors.textSoftLight,
                       fontSize: 11)),
           ])),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text(status == 'completed' ? '+₹${amount.toStringAsFixed(0)}' : '₹${amount.toStringAsFixed(0)}',
-                style: TextStyle(
-                    color:      status == 'completed' ? AppColors.success
-                        : (isDark ? AppColors.textMidDark : AppColors.textMidLight),
-                    fontSize:   14, fontWeight: FontWeight.w700)),
+            Text(
+              status == 'completed'
+                  ? '+₹${amount.toStringAsFixed(0)}'
+                  : '₹${amount.toStringAsFixed(0)}',
+              style: TextStyle(
+                  color:      status == 'completed' ? AppColors.success
+                      : (isDark ? AppColors.textMidDark : AppColors.textMidLight),
+                  fontSize:   14, fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 4),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -325,14 +399,16 @@ class _JobCard extends StatelessWidget {
     );
   }
 
+  // FIX 9 — unified status set: pending/accepted/ongoing/completed/cancelled
+  // 'active' removed; 'accepted' + 'ongoing' added
   (Color, IconData, String) _statusInfo(String s) {
     switch (s.toLowerCase()) {
-      case 'completed':  return (AppColors.success,       Icons.check_circle_rounded,  'DONE');
-      case 'accepted':   return (AppColors.brandPurple,   Icons.handshake_rounded,     'ACCEPTED');
-      case 'in_progress':return (AppColors.onlineGreen,   Icons.play_circle_rounded,   'ACTIVE');
-      case 'declined':   return (AppColors.danger,        Icons.cancel_rounded,        'DECLINED');
-      case 'timeout':    return (AppColors.textSoftDark,  Icons.timer_off_rounded,     'TIMEOUT');
-      default:           return (AppColors.warning,       Icons.pending_rounded,       'PENDING');
+      case 'completed': return (AppColors.success,       Icons.check_circle_rounded,       'DONE');
+      case 'ongoing':   return (AppColors.onlineGreen,   Icons.play_circle_rounded,        'IN PROGRESS');
+      case 'accepted':  return (AppColors.brandPurple,   Icons.event_available_rounded,    'UPCOMING');
+      case 'pending':   return (AppColors.warning,       Icons.pending_rounded,             'PENDING');
+      case 'cancelled': return (AppColors.danger,        Icons.cancel_rounded,              'CANCELLED');
+      default:          return (AppColors.warning,       Icons.help_outline_rounded,        s.toUpperCase());
     }
   }
 }
