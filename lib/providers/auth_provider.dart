@@ -2,11 +2,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // CHANGES FROM ORIGINAL (all marked with ← FIX):
 //
-//  1. register()       — added phoneNumber, location, serviceType, kycStatus fields
+//  1. register()       — added phoneNumber, location, serviceType, kycStatus,
+//                        subcategory fields
 //  2. loginWithGoogle()— added phoneNumber, location, serviceType, kycStatus fields
 //  3. submitKyc()      — renamed kycData→kycDocuments, status→kycStatus:'pending',
 //                        kycDone stays false until approved, added kycSubmittedAt
 //  4. skipKyc()        — added kycStatus:'not_submitted'
+//  5. updateProfile()  — added subcategory field to keep in sync with services
 // ─────────────────────────────────────────────────────────────────────────────
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -90,8 +92,10 @@ class AuthProvider extends ChangeNotifier {
         .collection('items')
         .where('read', isEqualTo: false)
         .snapshots()
-        .listen((s) { _unreadCount = s.docs.length; notifyListeners(); },
-        onError: (e) => debugPrint('notifSub: $e'));
+        .listen(
+          (s) { _unreadCount = s.docs.length; notifyListeners(); },
+      onError: (e) => debugPrint('notifSub: $e'),
+    );
   }
 
   Future<void> markAllNotificationsRead() async {
@@ -139,7 +143,10 @@ class AuthProvider extends ChangeNotifier {
   // ─────────────────────────────────────────────────────────────
   // LOGIN
   // ─────────────────────────────────────────────────────────────
-  Future<bool> login({required String identifier, required String password}) async {
+  Future<bool> login({
+    required String identifier,
+    required String password,
+  }) async {
     _isLoading    = true;
     _errorMessage = null;
     notifyListeners();
@@ -226,6 +233,7 @@ class AuthProvider extends ChangeNotifier {
           'area':            '',
           'location':        '',
           'services':        <String>[],
+          'subcategory':     '',         // ← FIX 5: mirror for user-side query
           'serviceType':     '',
           'status':          'pending',
           'rating':          0.0,
@@ -326,6 +334,13 @@ class AuthProvider extends ChangeNotifier {
 
         'services':        services,
 
+        // ← FIX 5: subcategory mirrors services.first so user app's
+        //   arrayContains query on helpers finds this helper.
+        //   helper_list_screen.dart queries: .where('subcategory', isEqualTo: selectedService)
+        //   OR after user-side fix: .where('services', arrayContains: selectedService)
+        //   Writing both ensures backward compatibility.
+        'subcategory':     services.isNotEmpty ? services.first : '',
+
         // ← FIX: Store as both 'area' AND 'location'
         //   Admin panel reads h.location; Flutter model reads 'area'
         'area':            area.trim(),
@@ -384,26 +399,26 @@ class AuthProvider extends ChangeNotifier {
         // ← FIX 1 (ROOT CAUSE): Was 'kycData' — admin reads from 'kycDocuments'
         //   The entire KYC modal in admin does: const docs = h.kycDocuments || {}
         //   Saving under 'kycData' means docs is always {}, showing '—' for everything
-        'kycDocuments':    kycData,
+        'kycDocuments':   kycData,
 
         // ← FIX 2 (ROOT CAUSE): Was 'status': 'submitted'
         //   Admin filters with: allHelpers.filter(h => h.kycStatus === 'pending')
         //   'status' and 'kycStatus' are TWO DIFFERENT FIELDS.
         //   'status' being 'submitted' has zero effect on KYC visibility.
         //   Without this line, admin will always show "No pending KYC applications".
-        'kycStatus':       'pending',
+        'kycStatus':      'pending',
 
         // ← FIX 3: kycDone should remain false until admin APPROVES, not on submission
         //   Setting kycDone:true here would incorrectly mark KYC as complete
         //   before admin review
-        'kycDone':         false,
+        'kycDone':        false,
 
         // ← FIX 4: Added kycSubmittedAt — admin modal displays this field:
         //   h.kycSubmittedAt?.toDate ? h.kycSubmittedAt.toDate().toLocaleDateString() : 'N/A'
         //   Without this, "Submitted On" always shows 'N/A'
-        'kycSubmittedAt':  FieldValue.serverTimestamp(),
+        'kycSubmittedAt': FieldValue.serverTimestamp(),
 
-        'updatedAt':       FieldValue.serverTimestamp(),
+        'updatedAt':      FieldValue.serverTimestamp(),
       });
 
       // Update local model immediately so UI reflects pending state
@@ -419,7 +434,8 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> skipKyc() async {
-    final uid = _auth.currentUser?.uid; if (uid == null) return;
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return;
     try {
       await _db.collection('helpers').doc(uid).update({
         'kycSkipped': true,
@@ -449,6 +465,11 @@ class AuthProvider extends ChangeNotifier {
         'area':        area.trim(),
         'location':    area.trim(),    // ← FIX: keep alias in sync
         'services':    services,
+        // ← FIX 5: keep subcategory in sync with services so user-side
+        //   helper search continues to find this helper after profile edits.
+        //   Without this, a helper who updates their services disappears
+        //   from user search results until they re-register.
+        'subcategory': services.isNotEmpty ? services.first : '',
         'serviceType': services.isNotEmpty ? services.first : '',  // ← FIX
         'updatedAt':   FieldValue.serverTimestamp(),
       });
@@ -474,8 +495,9 @@ class AuthProvider extends ChangeNotifier {
   Future<void> logout() async {
     final uid = _auth.currentUser?.uid;
     if (uid != null) {
-      try { await _db.collection('helpers').doc(uid).update({'isOnline': false}); }
-      catch (_) {}
+      try {
+        await _db.collection('helpers').doc(uid).update({'isOnline': false});
+      } catch (_) {}
     }
     _cancelStreams();
     _helper = null; _errorMessage = null; _unreadCount = 0;
@@ -494,7 +516,7 @@ class AuthProvider extends ChangeNotifier {
     switch (code) {
       case 'user-not-found':
       case 'wrong-password':
-      case 'invalid-credential': return 'Invalid email/username or password.';
+      case 'invalid-credential':   return 'Invalid email/username or password.';
       case 'email-already-in-use': return 'Email already registered.';
       case 'weak-password':        return 'Password must be at least 6 characters.';
       case 'invalid-email':        return 'Please enter a valid email address.';

@@ -1,16 +1,4 @@
-// lib/service/booking_chat_service.dart
-//
-// Call BookingChatService.instance.onBookingAccepted(...)
-// from wherever your helper accepts a booking (e.g. HelperBookingsScreen).
-//
-// What it does:
-//   1. Creates (or reuses) a Firestore `chats/{chatId}` document.
-//   2. Writes the auto-confirmation message to RTDB `chats/{chatId}/messages`.
-//   3. Fires a Firestore notification so the user sees the badge immediately.
-//   4. Updates the booking doc with chatId + status = 'accepted'.
-//
-// The chatId is the Firestore doc ID — both sides (user ChatScreen and
-// helper HelperChatRoomScreen) receive it and hit the same RTDB path.
+
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/realtime_db_service.dart';
@@ -46,89 +34,70 @@ class BookingChatService {
     required String userId,
     required String userName,
     required String serviceName,
-    required String scheduledTime, // human-readable, e.g. "10:00 AM, 30 Mar 2026"
+    required String scheduledTime,
   }) async {
-    // ── Step 1: find or create the Firestore chat document ─────────────────
-    String chatId;
+    // ── chatId = bookingId (deterministic — both apps derive it the same way,
+    //    no lookup needed, no random Firestore ID mismatch possible)
+    final chatId = bookingId;
 
-    final existing = await _fs
-        .collection('chats')
-        .where('bookingId', isEqualTo: bookingId)
-        .limit(1)
-        .get();
-
-    if (existing.docs.isNotEmpty) {
-      // Chat already exists (e.g. booking was re-accepted after cancellation)
-      chatId = existing.docs.first.id;
-      await _fs.collection('chats').doc(chatId).update({
-        'bookingStatus': 'accepted',
-        'helperName': helperName,
-        'helperPhoto': helperPhoto ?? '',
-        'otherName': helperName,
-        'userUnread': FieldValue.increment(1),
-        'unreadCount_$userId': FieldValue.increment(1),
-        'lastMessage': 'Booking confirmed! I\'ll be there at $scheduledTime.',
+    // ── Step 1: set (merge) the Firestore chat document ────────────────────
+    // merge:true → re-acceptances never wipe existing RTDB message history.
+    // All fields written in one call so both apps always see a complete doc.
+    await _fs.collection('chats').doc(chatId).set(
+      {
+        'chatId':          chatId,           // self-reference — handy for queries
+        'bookingId':       bookingId,
+        // helperId required by helper _BookingChatList: .where('helperId', isEqualTo: uid)
+        'helperId':        helperId,
+        'helperName':      helperName,
+        'helperPhoto':     helperPhoto ?? '',
+        'userId':          userId,
+        'userName':        userName,
+        // otherName required by user _ConversationTile display name
+        'otherName':       helperName,
+        // helperOnline required by user _ConversationTile online indicator
+        'helperOnline':    true,
+        'serviceName':     serviceName,
+        // participants required by user-side arrayContains query
+        'participants':    [userId, helperId],
+        'lastMessage':     'Booking confirmed! I\'ll be there at $scheduledTime.',
         'lastMessageTime': FieldValue.serverTimestamp(),
-      });
-    } else {
-      // ── Create fresh chat document ───────────────────────────────────────
-      // Fields explanation:
-      //   participants     → user-side query: .where('participants', arrayContains: uid)
-      //   helperId         → helper-side query: .where('helperId', isEqualTo: uid)
-      //   otherName        → user-side display name (shows helper's name)
-      //   userName         → helper-side display name (shows user's name)
-      //   unreadCount_{id} → user-side badge field
-      //   helperUnread     → helper-side badge field
-      final ref = await _fs.collection('chats').add({
-        'bookingId': bookingId,
-        'helperId': helperId,
-        'helperName': helperName,
-        'helperPhoto': helperPhoto ?? '',
-        'userId': userId,
-        'userName': userName,
-        'otherName': helperName,       // what user sees as the chat name
-        'helperOnline': true,
-        'serviceName': serviceName,
-        'participants': [userId, helperId],
-        'lastMessage': 'Booking confirmed! I\'ll be there at $scheduledTime.',
-        'lastMessageTime': FieldValue.serverTimestamp(),
-        'helperUnread': 0,             // helper hasn't missed anything yet
-        'userUnread': 1,               // user has 1 unread (the auto message)
-        'unreadCount_$userId': 1,      // mirrors userUnread for user-side query
-        'bookingStatus': 'accepted',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      chatId = ref.id;
-    }
+        'helperUnread':    0,
+        'userUnread':      1,
+        'unreadCount_$userId': 1,
+        'bookingStatus':   'accepted',
+        'createdAt':       FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
 
     // ── Step 2: stamp chatId onto the booking doc ───────────────────────────
     await _fs.collection('bookings').doc(bookingId).update({
-      'chatId': chatId,
-      'status': 'accepted',
+      'chatId':     chatId,
+      'status':     'accepted',
       'acceptedAt': FieldValue.serverTimestamp(),
-    }).catchError((_) {}); // don't crash if booking doc structure differs
+    }).catchError((_) {});
 
     // ── Step 3: send auto-confirmation RTDB message ─────────────────────────
     await RealtimeDbService.instance.sendBookingConfirmedMessage(
-      chatId: chatId,
-      helperId: helperId,
-      helperName: helperName,
-      userName: userName,
-      serviceName: serviceName,
+      chatId:        chatId,
+      helperId:      helperId,
+      helperName:    helperName,
+      userName:      userName,
+      serviceName:   serviceName,
       scheduledTime: scheduledTime,
-      userId: userId,
+      userId:        userId,
     );
 
-    // ── Step 4: create Firestore notification so badge updates immediately ──
+    // ── Step 4: Firestore notification so badge updates immediately ─────────
     await _sendBookingConfirmedNotification(
-      userId: userId,
-      helperId: helperId,
-      helperName: helperName,
-      serviceName: serviceName,
+      userId:        userId,
+      helperId:      helperId,
+      helperName:    helperName,
+      serviceName:   serviceName,
       scheduledTime: scheduledTime,
-      bookingId: bookingId,
-      chatId: chatId,
+      bookingId:     bookingId,
+      chatId:        chatId,
     );
 
     return chatId;

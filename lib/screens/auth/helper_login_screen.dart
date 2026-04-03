@@ -378,7 +378,7 @@ class _HelperLoginScreenState extends State<HelperLoginScreen>
                 fontSize: 13)),
         GestureDetector(
           onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const HelperRegisterScreen())),
+              MaterialPageRoute(builder: (_) => const RegisterScreen())),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             const Text('Register as Sarthi',
                 style: TextStyle(

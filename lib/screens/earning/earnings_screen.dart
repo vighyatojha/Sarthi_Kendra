@@ -1,45 +1,65 @@
-// lib/screens/earnings/earnings_screen.dart
+// lib/screens/earning/earnings_screen.dart
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-
-import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 
+// ── Light-only palette ────────────────────────────────────────────────────────
+const _purple = Color(0xFF7C3AED);
+const _indigo = Color(0xFF2D1B69);
+const _violet = Color(0xFF5B21B6);
+const _green  = Color(0xFF16A34A);
+const _amber  = Color(0xFFF59E0B);
+const _red    = Color(0xFFEF4444);
+const _bg     = Color(0xFFF8F7FF);
+const _t1     = Color(0xFF1E1B4B);
+const _t2     = Color(0xFF64748B);
+const _t3     = Color(0xFF94A3B8);
+const _border = Color(0xFFEDE9FE);
+
+double _sd(dynamic v) =>
+    v == null ? 0.0 : v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0.0;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
-
   @override
   State<EarningsScreen> createState() => _EarningsScreenState();
 }
 
 class _EarningsScreenState extends State<EarningsScreen> {
-  int _selectedPeriod = 0; // 0 = Weekly, 1 = Monthly
+  int _period = 0; // 0 = Weekly  1 = Monthly
 
   @override
   Widget build(BuildContext context) {
-    final isDark    = Theme.of(context).brightness == Brightness.dark;
-    final helperId  = context.watch<AuthProvider>().helper?.uid ?? ''; // ← fixed: uid not id
+    final uid = context.watch<AuthProvider>().helper?.uid ?? '';
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
+      backgroundColor: _bg,
       body: CustomScrollView(
+        physics: const BouncingScrollPhysics(),
         slivers: [
-          SliverToBoxAdapter(child: _buildAppBar(context, isDark)),
+          SliverToBoxAdapter(child: _EarnHeader(uid: uid)),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 110),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
-                _buildBalanceCard(helperId, isDark),
+                _BalanceCard(uid: uid),
                 const SizedBox(height: 16),
-                _buildPeriodSelector(isDark),
+                _PeriodToggle(
+                  period: _period,
+                  onChanged: (p) => setState(() => _period = p),
+                ),
                 const SizedBox(height: 16),
-                _buildAnalyticsCard(isDark),
-                const SizedBox(height: 20),
-                _buildSectionHeader('Recent Activity', isDark),
+                _ChartCard(uid: uid, period: _period),
+                const SizedBox(height: 16),
+                _QuickStatsRow(uid: uid),
+                const SizedBox(height: 24),
+                _SecHead('Recent Transactions'),
                 const SizedBox(height: 12),
-                _buildActivityList(isDark),
+                _TransactionList(uid: uid),
               ]),
             ),
           ),
@@ -47,98 +67,283 @@ class _EarningsScreenState extends State<EarningsScreen> {
       ),
     );
   }
+}
 
-  Widget _buildAppBar(BuildContext context, bool isDark) {
-    return Container(
-      padding: EdgeInsets.only(
-        top:    MediaQuery.of(context).padding.top + 12,
-        bottom: 14, left: 8, right: 16,
-      ),
-      color: isDark ? AppColors.bgDark : AppColors.bgLight,
-      child: Row(children: [
-        IconButton(
-          onPressed: () => Navigator.maybePop(context),
-          icon: Icon(Icons.arrow_back_ios_new_rounded,
-              color: isDark ? Colors.white : AppColors.textDarkLight, size: 20),
-        ),
-        Expanded(child: Text('Earnings & Analytics', style: TextStyle(
-          color:      isDark ? Colors.white : AppColors.textDarkLight,
-          fontSize:   18, fontWeight: FontWeight.w700,
-        ))),
-        IconButton(
-          onPressed: () {},
-          icon: Icon(Icons.help_outline_rounded,
-              color: isDark ? AppColors.textMidDark : AppColors.textMidLight),
-        ),
-      ]),
+// ── Header with live today's total ───────────────────────────────────────────
+class _EarnHeader extends StatelessWidget {
+  final String uid;
+  const _EarnHeader({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    final today = DateTime.now();
+    final start =
+    Timestamp.fromDate(DateTime(today.year, today.month, today.day));
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: uid.isEmpty
+          ? const Stream.empty()
+          : FirebaseFirestore.instance
+          .collection('bookings')
+          .where('helperId', isEqualTo: uid)
+          .where('status', isEqualTo: 'completed')
+          .where('completedAt', isGreaterThanOrEqualTo: start)
+          .snapshots(),
+      builder: (ctx, snap) {
+        double todayTotal = 0;
+        int todayJobs = 0;
+        if (snap.hasData) {
+          for (final d in snap.data!.docs) {
+            todayTotal += _sd((d.data() as Map)['baseAmount']);
+            todayJobs++;
+          }
+        }
+
+        return ClipPath(
+          clipper: _EarnCurveClipper(),
+          child: Container(
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + 18,
+              bottom: 48,  // extra for curve
+              left: 20,
+              right: 20,
+            ),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [_indigo, _violet, _purple],
+              ),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // Top row
+              Row(children: [
+                const Text('Earnings',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800)),
+                const Spacer(),
+                if (snap.connectionState == ConnectionState.active)
+                  Container(
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(
+                          width: 6,
+                          height: 6,
+                          decoration: const BoxDecoration(
+                              color: Color(0xFF4ADE80),
+                              shape: BoxShape.circle)),
+                      const SizedBox(width: 5),
+                      const Text('LIVE',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800)),
+                    ]),
+                  ),
+              ]),
+              const SizedBox(height: 22),
+              // Today's card inside header
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: Colors.white.withOpacity(0.22)),
+                ),
+                child: Row(children: [
+                  Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "TODAY'S EARNINGS",
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.1),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '₹ ${todayTotal.toStringAsFixed(0)}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 34,
+                              fontWeight: FontWeight.w900,
+                              height: 1.1),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '$todayJobs job${todayJobs == 1 ? '' : 's'} completed',
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 12),
+                        ),
+                      ])),
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        shape: BoxShape.circle),
+                    child: const Icon(Icons.trending_up_rounded,
+                        color: Colors.white, size: 26),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+        );
+      },
     );
   }
+}
 
-  Widget _buildBalanceCard(String helperId, bool isDark) {
+class _EarnCurveClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final path = Path()
+      ..lineTo(0, size.height - 32)
+      ..quadraticBezierTo(
+          size.width / 2, size.height + 26, size.width, size.height - 32)
+      ..lineTo(size.width, 0)
+      ..close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(CustomClipper<Path> old) => false;
+}
+
+// ── Balance card ─────────────────────────────────────────────────────────────
+class _BalanceCard extends StatelessWidget {
+  final String uid;
+  const _BalanceCard({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot>(
-      stream: helperId.isEmpty
+      stream: uid.isEmpty
           ? const Stream.empty()
           : FirebaseFirestore.instance
           .collection('helpers')
-          .doc(helperId)
+          .doc(uid)
           .snapshots(),
-      builder: (context, snap) {
-        final data    = snap.data?.data() as Map<String, dynamic>? ?? {};
-        final balance = ((data['totalBalance'] ?? 12450.0) as num).toDouble();
+      builder: (ctx, snap) {
+        final d = snap.data?.data() as Map<String, dynamic>? ?? {};
+        final balance = _sd(d['totalBalance'] ?? d['walletBalance'] ?? 0);
+        final pending = _sd(d['pendingBalance'] ?? 0);
 
         return Container(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin:  Alignment.topLeft,
-              end:    Alignment.bottomRight,
-              colors: [AppColors.gradientStart, AppColors.gradientMid],
-            ),
+            color: Colors.white,
             borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: _border),
+            boxShadow: [
+              BoxShadow(
+                  color: _purple.withOpacity(0.08),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4))
+            ],
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('TOTAL BALANCE', style: TextStyle(
-              color:      Colors.white.withOpacity(0.6),
-              fontSize:   11, fontWeight: FontWeight.w700, letterSpacing: 1.5,
-            )),
-            const SizedBox(height: 10),
-            Text('₹${NumberFormat('#,##0.00').format(balance)}',
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 34,
-                    fontWeight: FontWeight.w800)),
-            const SizedBox(height: 6),
-            const Row(children: [
-              Icon(Icons.trending_up_rounded,
-                  size: 14, color: AppColors.onlineGreen),
-              SizedBox(width: 4),
-              Text('+12% from last week', style: TextStyle(
-                  color: AppColors.onlineGreen, fontSize: 13,
-                  fontWeight: FontWeight.w600)),
-            ]),
-            const SizedBox(height: 20),
+          child: Column(children: [
             Row(children: [
-              Expanded(child: ElevatedButton.icon(
-                onPressed: () => _showWithdrawSheet(context),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.brandPurple,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('TOTAL BALANCE',
+                          style: TextStyle(
+                              color: _t3,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.1)),
+                      const SizedBox(height: 6),
+                      Text(
+                        '₹ ${NumberFormat('#,##,###.##').format(balance)}',
+                        style: const TextStyle(
+                            color: _t1, fontSize: 28, fontWeight: FontWeight.w900),
+                      ),
+                      if (pending > 0) ...[
+                        const SizedBox(height: 4),
+                        Row(children: [
+                          const Icon(Icons.schedule_rounded,
+                              size: 12, color: _amber),
+                          const SizedBox(width: 4),
+                          Text(
+                            '₹${pending.toStringAsFixed(0)} pending clearance',
+                            style: const TextStyle(
+                                color: _amber,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ]),
+                      ],
+                    ]),
+              ),
+              // Withdraw button
+              GestureDetector(
+                onTap: () => _showWithdrawSheet(context, balance),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                        colors: [_violet, _purple]),
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                          color: _purple.withOpacity(0.3),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4))
+                    ],
+                  ),
+                  child: const Row(children: [
+                    Icon(Icons.account_balance_rounded,
+                        color: Colors.white, size: 16),
+                    SizedBox(width: 6),
+                    Text('Withdraw',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700)),
+                  ]),
                 ),
-                icon:  const Icon(Icons.account_balance_rounded, size: 18),
-                label: const Text('Withdraw',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
-              )),
-              const SizedBox(width: 12),
-              Container(
-                width: 50, height: 50,
-                decoration: BoxDecoration(
-                  color:        Colors.white.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withOpacity(0.2)),
-                ),
-                child: const Icon(Icons.history_rounded,
-                    color: Colors.white, size: 22),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            // Divider
+            Container(height: 1, color: _border),
+            const SizedBox(height: 16),
+            // Mini stats row
+            Row(children: [
+              _MiniStat(
+                label: 'This Month',
+                valueStream: uid.isEmpty
+                    ? const Stream.empty()
+                    : _monthStream(uid),
+              ),
+              _vDivider(),
+              _MiniStat(
+                label: 'This Week',
+                valueStream: uid.isEmpty
+                    ? const Stream.empty()
+                    : _weekStream(uid),
+              ),
+              _vDivider(),
+              _MiniStat(
+                label: 'Total Jobs',
+                valueStream: uid.isEmpty
+                    ? const Stream.empty()
+                    : _jobsStream(uid),
+                isCount: true,
               ),
             ]),
           ]),
@@ -147,307 +352,713 @@ class _EarningsScreenState extends State<EarningsScreen> {
     );
   }
 
-  Widget _buildPeriodSelector(bool isDark) {
-    const periods = ['Weekly', 'Monthly'];
-    return Container(
-      height: 42,
-      decoration: BoxDecoration(
-        color:        isDark ? AppColors.cardDark : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-            color: isDark ? AppColors.borderDark : AppColors.borderLight),
+  Widget _vDivider() => Container(
+      width: 1, height: 36, color: _border, margin: const EdgeInsets.symmetric(horizontal: 4));
+
+  Stream<QuerySnapshot> _monthStream(String uid) {
+    final now = DateTime.now();
+    final start = Timestamp.fromDate(DateTime(now.year, now.month, 1));
+    return FirebaseFirestore.instance
+        .collection('bookings')
+        .where('helperId', isEqualTo: uid)
+        .where('status', isEqualTo: 'completed')
+        .where('completedAt', isGreaterThanOrEqualTo: start)
+        .snapshots();
+  }
+
+  Stream<QuerySnapshot> _weekStream(String uid) {
+    final now = DateTime.now();
+    final start = Timestamp.fromDate(
+        now.subtract(Duration(days: now.weekday - 1)));
+    return FirebaseFirestore.instance
+        .collection('bookings')
+        .where('helperId', isEqualTo: uid)
+        .where('status', isEqualTo: 'completed')
+        .where('completedAt', isGreaterThanOrEqualTo: start)
+        .snapshots();
+  }
+
+  Stream<QuerySnapshot> _jobsStream(String uid) =>
+      FirebaseFirestore.instance
+          .collection('bookings')
+          .where('helperId', isEqualTo: uid)
+          .where('status', isEqualTo: 'completed')
+          .snapshots();
+
+  void _showWithdrawSheet(BuildContext context, double balance) {
+    final ctrl = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _WithdrawSheet(balance: balance, ctrl: ctrl),
+    );
+  }
+}
+
+class _MiniStat extends StatelessWidget {
+  final String label;
+  final Stream<QuerySnapshot> valueStream;
+  final bool isCount;
+  const _MiniStat(
+      {required this.label,
+        required this.valueStream,
+        this.isCount = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: StreamBuilder<QuerySnapshot>(
+        stream: valueStream,
+        builder: (ctx, snap) {
+          double total = 0;
+          int count = 0;
+          if (snap.hasData) {
+            count = snap.data!.docs.length;
+            for (final d in snap.data!.docs) {
+              total += _sd((d.data() as Map)['baseAmount']);
+            }
+          }
+          return Column(children: [
+            Text(
+              isCount
+                  ? '$count'
+                  : '₹${NumberFormat('#,###').format(total)}',
+              style: const TextStyle(
+                  color: _purple, fontSize: 15, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 3),
+            Text(label,
+                style: const TextStyle(color: _t3, fontSize: 10)),
+          ]);
+        },
       ),
-      child: Row(
-        children: periods.asMap().entries.map((entry) {
-          final selected = _selectedPeriod == entry.key;
-          return Expanded(child: GestureDetector(
-            onTap: () => setState(() => _selectedPeriod = entry.key),
+    );
+  }
+}
+
+// ── Period toggle ─────────────────────────────────────────────────────────────
+class _PeriodToggle extends StatelessWidget {
+  final int period;
+  final void Function(int) onChanged;
+  const _PeriodToggle({required this.period, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 42,
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: _border),
+    ),
+    child: Row(
+      children: ['Weekly', 'Monthly'].asMap().entries.map((e) {
+        final sel = period == e.key;
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => onChanged(e.key),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               margin: const EdgeInsets.all(3),
               decoration: BoxDecoration(
-                color:        selected ? AppColors.brandPurple : Colors.transparent,
-                borderRadius: BorderRadius.circular(9),
+                color: sel ? _purple : Colors.transparent,
+                borderRadius: BorderRadius.circular(11),
+                boxShadow: sel
+                    ? [BoxShadow(
+                    color: _purple.withOpacity(0.25),
+                    blurRadius: 8, offset: const Offset(0, 3))]
+                    : null,
               ),
-              child: Center(child: Text(entry.value, style: TextStyle(
-                color:      selected
-                    ? Colors.white
-                    : (isDark ? AppColors.textMidDark : AppColors.textMidLight),
-                fontSize:   13,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ))),
-            ),
-          ));
-        }).toList(),
-      ),
-    );
-  }
-
-  Widget _buildAnalyticsCard(bool isDark) {
-    const weeklyData = [1200.0, 1800.0, 1100.0, 2800.0, 2200.0, 1600.0, 400.0];
-    const days       = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const maxVal     = 2800.0;
-    const thisWeek   = 3240.0;
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color:        isDark ? AppColors.cardDark : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: isDark ? AppColors.borderDark : AppColors.borderLight),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Weekly Analytics', style: TextStyle(
-              color:      isDark ? Colors.white : AppColors.textDarkLight,
-              fontSize:   16, fontWeight: FontWeight.w700,
-            )),
-            const SizedBox(height: 2),
-            Text('Dec 1 - Dec 7', style: TextStyle(
-              color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-              fontSize: 12,
-            )),
-          ]),
-          const Spacer(),
-          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text('₹${NumberFormat('#,##0').format(thisWeek)}',
-                style: const TextStyle(
-                    color: AppColors.brandPurple,
-                    fontSize: 20, fontWeight: FontWeight.w800)),
-            Text('THIS WEEK', style: TextStyle(
-              color:    isDark ? AppColors.textSoftDark : AppColors.textSoftLight,
-              fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1,
-            )),
-          ]),
-        ]),
-        const SizedBox(height: 24),
-        SizedBox(
-          height: 120,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: weeklyData.asMap().entries.map((entry) {
-              final i         = entry.key;
-              final val       = entry.value;
-              final isHighest = val == maxVal;
-              final barHeight = (val / maxVal) * 100;
-
-              return Expanded(child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    AnimatedContainer(
-                      duration: Duration(milliseconds: 300 + i * 60),
-                      height:   barHeight,
-                      decoration: BoxDecoration(
-                        color:        isHighest
-                            ? AppColors.brandPurple
-                            : AppColors.brandPurple.withOpacity(0.35),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(days[i], style: TextStyle(
-                      color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-                      fontSize: 10,
+              child: Center(
+                child: Text(e.value,
+                    style: TextStyle(
+                      color: sel ? Colors.white : _t3,
+                      fontSize: 13,
+                      fontWeight:
+                      sel ? FontWeight.w700 : FontWeight.w500,
                     )),
-                  ],
-                ),
-              ));
-            }).toList(),
+              ),
+            ),
           ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildSectionHeader(String title, bool isDark) {
-    return Row(children: [
-      Text(title, style: TextStyle(
-        color:      isDark ? Colors.white : AppColors.textDarkLight,
-        fontSize:   18, fontWeight: FontWeight.w700,
-      )),
-      const Spacer(),
-      TextButton(
-        onPressed: () {},
-        child: const Text('View All', style: TextStyle(
-            color: AppColors.brandPurple, fontWeight: FontWeight.w600)),
-      ),
-    ]);
-  }
-
-  Widget _buildActivityList(bool isDark) {
-    const transactions = [
-      _Transaction(
-        icon:     Icons.cleaning_services_rounded,
-        iconColor: AppColors.brandPurple,
-        title:    'Home Cleaning Service',
-        subtitle: 'Today, 2:30 PM',
-        amount:   '+₹450.00',
-        status:   'COMPLETED',
-        isCredit: true,
-      ),
-      _Transaction(
-        icon:     Icons.electrical_services_rounded,
-        iconColor: AppColors.warning,
-        title:    'Electric Repair',
-        subtitle: 'Yesterday, 11:15 AM',
-        amount:   '+₹850.00',
-        status:   'COMPLETED',
-        isCredit: true,
-      ),
-      _Transaction(
-        icon:     Icons.account_balance_rounded,
-        iconColor: AppColors.textMidDark,
-        title:    'Bank Withdrawal',
-        subtitle: '02 Dec, 5:00 PM',
-        amount:   '-₹2,000.00',
-        status:   'SENT TO BANK',
-        isCredit: false,
-      ),
-    ];
-
-    return Column(
-      children: transactions
-          .map((t) => _TransactionCard(transaction: t, isDark: isDark))
-          .toList(),
-    );
-  }
-
-  void _showWithdrawSheet(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    showModalBottomSheet(
-      context:         context,
-      backgroundColor: isDark ? AppColors.cardDark : Colors.white,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      isScrollControlled: true,
-      builder: (_) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          24, 16, 24,
-          MediaQuery.of(context).viewInsets.bottom + 24,
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Center(child: Container(
-                width: 40, height: 4,
-                decoration: BoxDecoration(
-                  color:        isDark ? AppColors.borderDark : AppColors.borderLight,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              )),
-              const SizedBox(height: 20),
-              Text('Withdraw Earnings', style: TextStyle(
-                color:      isDark ? Colors.white : AppColors.textDarkLight,
-                fontSize:   20, fontWeight: FontWeight.w700,
-              )),
-              const SizedBox(height: 6),
-              Text('Enter the amount you want to withdraw', style: TextStyle(
-                color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-                fontSize: 13,
-              )),
-              const SizedBox(height: 20),
-              TextFormField(
-                keyboardType: TextInputType.number,
-                style: TextStyle(
-                  color:      isDark ? Colors.white : AppColors.textDarkLight,
-                  fontSize:   20, fontWeight: FontWeight.w700,
-                ),
-                decoration: InputDecoration(
-                  prefixText:  '₹ ',
-                  prefixStyle: TextStyle(
-                    color:      isDark ? Colors.white : AppColors.textDarkLight,
-                    fontSize:   20, fontWeight: FontWeight.w700,
-                  ),
-                  hintText: '0.00',
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Request Withdrawal'),
-                ),
-              ),
-            ]),
-      ),
-    );
-  }
+        );
+      }).toList(),
+    ),
+  );
 }
 
-// ── Models ────────────────────────────────────────────────────────────────────
-class _Transaction {
-  final IconData icon;
-  final Color    iconColor;
-  final String   title;
-  final String   subtitle;
-  final String   amount;
-  final String   status;
-  final bool     isCredit;
-  const _Transaction({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.subtitle,
-    required this.amount,
-    required this.status,
-    required this.isCredit,
-  });
-}
-
-class _TransactionCard extends StatelessWidget {
-  final _Transaction transaction;
-  final bool         isDark;
-  const _TransactionCard({required this.transaction, required this.isDark});
+// ── Chart card — real-time from Firestore ────────────────────────────────────
+class _ChartCard extends StatelessWidget {
+  final String uid;
+  final int period;
+  const _ChartCard({required this.uid, required this.period});
 
   @override
   Widget build(BuildContext context) {
-    final t = transaction;
-    return Container(
-      margin:  const EdgeInsets.only(bottom: 10),
+    if (uid.isEmpty) return const SizedBox.shrink();
+
+    final now = DateTime.now();
+    final Timestamp rangeStart;
+    final int barCount;
+    final List<String> labels;
+
+    if (period == 0) {
+      // Weekly: Mon–Sun of current week
+      final weekStart = now.subtract(Duration(days: now.weekday - 1));
+      rangeStart = Timestamp.fromDate(
+          DateTime(weekStart.year, weekStart.month, weekStart.day));
+      barCount = 7;
+      labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    } else {
+      // Monthly: 4 weeks of current month
+      rangeStart = Timestamp.fromDate(DateTime(now.year, now.month, 1));
+      barCount = 4;
+      labels = ['Wk 1', 'Wk 2', 'Wk 3', 'Wk 4'];
+    }
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .where('helperId', isEqualTo: uid)
+          .where('status', isEqualTo: 'completed')
+          .where('completedAt', isGreaterThanOrEqualTo: rangeStart)
+          .orderBy('completedAt')
+          .snapshots(),
+      builder: (ctx, snap) {
+        final bars = List<double>.filled(barCount, 0.0);
+
+        if (snap.hasData) {
+          for (final doc in snap.data!.docs) {
+            final d = doc.data() as Map<String, dynamic>;
+            final ts =
+            (d['completedAt'] as Timestamp?)?.toDate()?.toLocal();
+            if (ts == null) continue;
+            final amt = _sd(d['baseAmount']);
+
+            if (period == 0) {
+              final idx = ts.weekday - 1; // 0=Mon
+              if (idx >= 0 && idx < 7) bars[idx] += amt;
+            } else {
+              final day = ts.day;
+              final idx =
+              ((day - 1) / 7).floor().clamp(0, 3);
+              bars[idx] += amt;
+            }
+          }
+        }
+
+        final total = bars.fold(0.0, (a, b) => a + b);
+        final maxVal = bars.fold(0.0, (a, b) => a > b ? a : b);
+        final todayBar = period == 0 ? now.weekday - 1 : ((now.day - 1) / 7).floor().clamp(0, 3);
+
+        return Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: _border),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 12,
+                  offset: const Offset(0, 3))
+            ],
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  period == 0 ? 'This Week' : 'This Month',
+                  style: const TextStyle(
+                      color: _t2,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '₹ ${NumberFormat('#,##,###').format(total)}',
+                  style: const TextStyle(
+                      color: _t1,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900),
+                ),
+              ]),
+              const Spacer(),
+              if (snap.connectionState == ConnectionState.active)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _green.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(
+                            color: _green, shape: BoxShape.circle)),
+                    const SizedBox(width: 4),
+                    const Text('LIVE',
+                        style: TextStyle(
+                            color: _green,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800)),
+                  ]),
+                ),
+            ]),
+            const SizedBox(height: 28),
+            SizedBox(
+              height: 120,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: List.generate(barCount, (i) {
+                  final val    = bars[i];
+                  final barH   = maxVal > 0 ? (val / maxVal) * 90 : 0.0;
+                  final isNow  = i == todayBar;
+                  final hasAmt = val > 0;
+
+                  return Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (hasAmt) ...[
+                            Text(
+                              '₹${val.toInt()}',
+                              style: const TextStyle(
+                                  color: _purple,
+                                  fontSize: 7,
+                                  fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 3),
+                          ],
+                          AnimatedContainer(
+                            duration: Duration(milliseconds: 400 + i * 60),
+                            curve: Curves.easeOut,
+                            height: barH.clamp(4.0, 90.0),
+                            decoration: BoxDecoration(
+                              gradient: (hasAmt || isNow)
+                                  ? const LinearGradient(
+                                colors: [_purple, Color(0xFF9D6FE8)],
+                                begin: Alignment.bottomCenter,
+                                end: Alignment.topCenter,
+                              )
+                                  : null,
+                              color: (!hasAmt && !isNow)
+                                  ? const Color(0xFFEDE9FE)
+                                  : null,
+                              borderRadius: BorderRadius.circular(8),
+                              boxShadow: hasAmt
+                                  ? [
+                                BoxShadow(
+                                    color: _purple.withOpacity(0.22),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 3))
+                              ]
+                                  : null,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            labels[i],
+                            style: TextStyle(
+                              color: isNow ? _purple : _t3,
+                              fontSize: 10,
+                              fontWeight: isNow
+                                  ? FontWeight.w800
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+// ── Quick stats row ───────────────────────────────────────────────────────────
+class _QuickStatsRow extends StatelessWidget {
+  final String uid;
+  const _QuickStatsRow({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid.isEmpty) return const SizedBox.shrink();
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('helpers')
+          .doc(uid)
+          .snapshots(),
+      builder: (ctx, snap) {
+        final d = snap.data?.data() as Map<String, dynamic>? ?? {};
+        final rating   = _sd(d['rating']);
+        final reviews  = (d['totalReviews'] as num?)?.toInt() ?? 0;
+        final done     = (d['completedJobs'] as num?)?.toInt() ??
+            (d['totalJobs'] as num?)?.toInt() ?? 0;
+
+        return Row(children: [
+          _StatTile(
+            icon: Icons.star_rounded,
+            iconColor: _amber,
+            bgColor: _amber.withOpacity(0.10),
+            label: 'Avg Rating',
+            value: rating == 0 ? '—' : rating.toStringAsFixed(1),
+            sub: '$reviews reviews',
+          ),
+          const SizedBox(width: 12),
+          _StatTile(
+            icon: Icons.check_circle_rounded,
+            iconColor: _green,
+            bgColor: _green.withOpacity(0.10),
+            label: 'Jobs Done',
+            value: '$done',
+            sub: 'all time',
+          ),
+        ]);
+      },
+    );
+  }
+}
+
+class _StatTile extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor, bgColor;
+  final String label, value, sub;
+  const _StatTile({
+    required this.icon, required this.iconColor,
+    required this.bgColor, required this.label,
+    required this.value, required this.sub,
+  });
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color:        isDark ? AppColors.cardDark : Colors.white,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: isDark ? AppColors.borderDark : AppColors.borderLight),
+        border: Border.all(color: _border),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.03),
+              blurRadius: 8,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Row(children: [
         Container(
-          width: 44, height: 44,
+          width: 42,
+          height: 42,
           decoration: BoxDecoration(
-            color:        t.iconColor.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(t.icon, color: t.iconColor, size: 22),
+              color: bgColor, borderRadius: BorderRadius.circular(12)),
+          child: Icon(icon, color: iconColor, size: 20),
         ),
         const SizedBox(width: 12),
-        Expanded(child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(t.title, style: TextStyle(
-            color:      isDark ? Colors.white : AppColors.textDarkLight,
-            fontSize:   14, fontWeight: FontWeight.w600,
-          )),
-          const SizedBox(height: 2),
-          Text(t.subtitle, style: TextStyle(
-            color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
-            fontSize: 12,
-          )),
-        ])),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text(t.amount, style: TextStyle(
-            color:      t.isCredit ? AppColors.success : AppColors.textMidDark,
-            fontSize:   15, fontWeight: FontWeight.w700,
-          )),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(
+                  color: _t3,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600)),
           const SizedBox(height: 3),
-          Text(t.status, style: TextStyle(
-            color:    isDark ? AppColors.textSoftDark : AppColors.textSoftLight,
-            fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.5,
-          )),
+          Text(value,
+              style: const TextStyle(
+                  color: _t1,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800)),
+          Text(sub,
+              style: const TextStyle(color: _t3, fontSize: 10)),
         ]),
+      ]),
+    ),
+  );
+}
+
+// ── Transaction list — real-time ─────────────────────────────────────────────
+class _TransactionList extends StatelessWidget {
+  final String uid;
+  const _TransactionList({required this.uid});
+
+  static (IconData, Color) _svcIcon(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('plumb'))  return (Icons.plumbing_rounded, Color(0xFF0EA5E9));
+    if (n.contains('electr')) return (Icons.electrical_services_rounded, _amber);
+    if (n.contains('clean'))  return (Icons.cleaning_services_rounded, Color(0xFF10B981));
+    if (n.contains('paint'))  return (Icons.format_paint_rounded, _red);
+    if (n.contains('ac') || n.contains('air'))
+      return (Icons.ac_unit_rounded, Color(0xFF06B6D4));
+    return (Icons.home_repair_service_rounded, _purple);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid.isEmpty) return _emptyState();
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .where('helperId', isEqualTo: uid)
+          .where('status', isEqualTo: 'completed')
+          .orderBy('completedAt', descending: true)
+          .limit(12)
+          .snapshots(),
+      builder: (ctx, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return _shimmer();
+        }
+
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) return _emptyState();
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: _border),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.03),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2))
+            ],
+          ),
+          child: Column(
+            children: docs.asMap().entries.map((e) {
+              final doc  = e.value;
+              final d    = doc.data() as Map<String, dynamic>;
+              final svc  = d['serviceName'] as String? ?? 'Service';
+              final amt  = _sd(d['baseAmount']);
+              final ts   = (d['completedAt'] as Timestamp?)?.toDate()?.toLocal();
+              final pay  = d['paymentMethod'] as String? ?? 'Cash';
+              final isCash = pay == 'Cash';
+              final isLast = e.key == docs.length - 1;
+              final (icon, color) = _svcIcon(svc);
+
+              return Column(children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 14),
+                  child: Row(children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                          color: color.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Icon(icon, color: color, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(svc,
+                                style: const TextStyle(
+                                    color: _t1,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                            const SizedBox(height: 3),
+                            Row(children: [
+                              if (ts != null)
+                                Text(
+                                  DateFormat('d MMM, h:mm a').format(ts),
+                                  style: const TextStyle(
+                                      color: _t3, fontSize: 11),
+                                ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: (isCash ? _green : _purple)
+                                      .withOpacity(0.10),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  isCash ? 'Cash' : 'UPI',
+                                  style: TextStyle(
+                                      color: isCash ? _green : _purple,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                            ]),
+                          ]),
+                    ),
+                    Column(crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text('+₹${amt.toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                  color: _green,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800)),
+                          const Text('COMPLETED',
+                              style: TextStyle(
+                                  color: _t3,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600)),
+                        ]),
+                  ]),
+                ),
+                if (!isLast)
+                  Divider(
+                      height: 1,
+                      color: const Color(0xFFF1F0FF),
+                      indent: 16,
+                      endIndent: 16),
+              ]);
+            }).toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _emptyState() => Container(
+    padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 24),
+    decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _border)),
+    child: Column(children: [
+      Container(
+        width: 64,
+        height: 64,
+        decoration: BoxDecoration(
+            color: _purple.withOpacity(0.10), shape: BoxShape.circle),
+        child: const Icon(Icons.receipt_long_rounded,
+            color: _purple, size: 28),
+      ),
+      const SizedBox(height: 14),
+      const Text('No transactions yet',
+          style: TextStyle(
+              color: _t1, fontSize: 15, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      const Text('Completed bookings will appear here',
+          style: TextStyle(color: _t2, fontSize: 12)),
+    ]),
+  );
+
+  Widget _shimmer() => Column(
+    children: List.generate(
+      3,
+          (_) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        height: 72,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F0FF),
+          borderRadius: BorderRadius.circular(14),
+        ),
+      ),
+    ),
+  );
+}
+
+// ── Section heading ───────────────────────────────────────────────────────────
+class _SecHead extends StatelessWidget {
+  final String title;
+  const _SecHead(this.title);
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+    Container(
+        width: 4,
+        height: 18,
+        decoration: BoxDecoration(
+            color: _purple, borderRadius: BorderRadius.circular(4))),
+    const SizedBox(width: 10),
+    Text(title,
+        style: const TextStyle(
+            color: _t1, fontSize: 17, fontWeight: FontWeight.w800)),
+  ]);
+}
+
+// ── Withdraw bottom sheet ─────────────────────────────────────────────────────
+class _WithdrawSheet extends StatelessWidget {
+  final double balance;
+  final TextEditingController ctrl;
+  const _WithdrawSheet({required this.balance, required this.ctrl});
+
+  @override
+  Widget build(BuildContext context) {
+    final safeB = MediaQuery.of(context).padding.bottom;
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      padding: EdgeInsets.fromLTRB(24, 0, 24, safeB + 24),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                  color: const Color(0xFFDEE2E6),
+                  borderRadius: BorderRadius.circular(2))),
+        ),
+        const Text('Withdraw Earnings',
+            style: TextStyle(
+                color: _t1, fontSize: 20, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 6),
+        Text(
+          'Available: ₹${NumberFormat('#,##,###.##').format(balance)}',
+          style: const TextStyle(color: _t2, fontSize: 13),
+        ),
+        const SizedBox(height: 24),
+        TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          style: const TextStyle(
+              color: _t1, fontSize: 22, fontWeight: FontWeight.w800),
+          decoration: InputDecoration(
+            prefixText: '₹ ',
+            prefixStyle: const TextStyle(
+                color: _purple, fontSize: 22, fontWeight: FontWeight.w800),
+            hintText: '0',
+            hintStyle: const TextStyle(color: _t3),
+            filled: true,
+            fillColor: const Color(0xFFF8F7FF),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: _border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: _border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: _purple, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        SizedBox(
+          width: double.infinity,
+          height: 54,
+          child: ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _purple,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+            ),
+            child: const Text('Request Withdrawal',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          ),
+        ),
       ]),
     );
   }

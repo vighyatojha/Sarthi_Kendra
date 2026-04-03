@@ -7,10 +7,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
+import '../../services/booking_chat_service.dart';
 import '../schedule/schedule_screen.dart';
 import '../location/helper_location_screen.dart';
 
 import '../../theme/app_theme.dart';
+import '../trust/trust_safety_screen.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/language_provider.dart';
 import '../../models/helper_model.dart';
@@ -200,11 +202,13 @@ class _HelperDashboardState extends State<HelperDashboard>
       _JobsTab(myPos: _myPos, pendingCount: _pendingCount, onGoHome: () => _switchTab(1)),
       _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0)),
       const EarningsScreen(),
+      const TrustSafetyScreen(),
       const HelperProfileScreen(),
     ];
 
     return Scaffold(
       backgroundColor: _P.bg,
+      extendBody: true,
       body: FadeTransition(
         opacity: _fadeAnim,
         child: IndexedStack(index: _tab, children: pages),
@@ -234,79 +238,178 @@ class _BottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
     final hi = lang.isHindi;
-    final items = [
-      (Icons.work_rounded,   Icons.work_outline_rounded,   hi ? 'काम'   : 'JOBS'),
-      (Icons.home_rounded,   Icons.home_outlined,          hi ? 'होम'   : 'HOME'),
-      (Icons.wallet_rounded, Icons.wallet_outlined,        hi ? 'कमाई' : 'EARN'),
-      (Icons.person_rounded, Icons.person_outline_rounded, hi ? 'मैं'   : 'ME'),
-    ];
 
     return Container(
-      decoration: BoxDecoration(
-        color: _P.white,
-        border: Border(top: BorderSide(color: const Color(0xFFECEBFF), width: 1)),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(0.07),
-            blurRadius: 20, offset: const Offset(0, -4))],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: items.asMap().entries.map((e) {
-              final i = e.key;
-              final (fill, out, lbl) = e.value;
-              final sel = selected == i;
-              final hasBadge = i == 0 && badge > 0;
-
-              return GestureDetector(
-                onTap: () => onSelect(i),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: sel ? _P.purple.withOpacity(0.10) : Colors.transparent,
-                    borderRadius: BorderRadius.circular(14),
+      color: Colors.transparent,
+      height: 82 + bottom,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        clipBehavior: Clip.none,
+        children: [
+          // ── Floating pill ──────────────────────────────────────────────
+          Positioned(
+            bottom: bottom + 10,
+            left: 18,
+            right: 18,
+            child: Container(
+              height: 62,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(34),
+                boxShadow: [
+                  BoxShadow(
+                    color: _P.purple.withOpacity(0.13),
+                    blurRadius: 30,
+                    spreadRadius: 0,
+                    offset: const Offset(0, 10),
                   ),
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Stack(clipBehavior: Clip.none, children: [
-                      Icon(sel ? fill : out, size: 24,
-                          color: sel ? _P.purple : _P.t3),
-                      if (hasBadge)
-                        Positioned(
-                          top: -5, right: -8,
-                          child: Container(
-                            constraints: const BoxConstraints(minWidth: 17),
-                            height: 17,
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            decoration: BoxDecoration(
-                                color: _P.red,
-                                borderRadius: BorderRadius.circular(9),
-                                border: Border.all(color: _P.white, width: 1.5)),
-                            child: Center(child: Text(
-                              badge > 9 ? '9+' : '$badge',
-                              style: const TextStyle(color: Colors.white,
-                                  fontSize: 9, fontWeight: FontWeight.w800),
-                            )),
-                          ),
-                        ),
-                    ]),
-                    const SizedBox(height: 3),
-                    Text(lbl, style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: sel ? FontWeight.w800 : FontWeight.w500,
-                      color: sel ? _P.purple : _P.t3,
-                      letterSpacing: 0.4,
-                    )),
-                  ]),
-                ),
-              );
-            }).toList(),
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.06),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _pill(0, Icons.work_rounded, Icons.work_outline_rounded,
+                      hi ? 'काम' : 'Jobs', showBadge: true),
+                  _pill(1, Icons.home_rounded, Icons.home_outlined,
+                      hi ? 'होम' : 'Home'),
+                  const SizedBox(width: 58),
+                  _pill(3, Icons.shield_rounded, Icons.shield_outlined,
+                      hi ? 'ट्रस्ट' : 'Trust'),
+                  _pill(4, Icons.person_rounded, Icons.person_outline_rounded,
+                      hi ? 'मैं' : 'Me'),
+                ],
+              ),
+            ),
           ),
+
+          // ── Centre elevated Earn button ────────────────────────────────
+          Positioned(
+            bottom: bottom + 18,
+            child: GestureDetector(
+              onTap: () {
+                HapticFeedback.mediumImpact();
+                onSelect(2);
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: selected == 2
+                        ? [const Color(0xFF5B21B6), const Color(0xFF7C3AED)]
+                        : [const Color(0xFF7C3AED), const Color(0xFF9D6FE8)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: _P.purple.withOpacity(selected == 2 ? 0.55 : 0.28),
+                      blurRadius: selected == 2 ? 24 : 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      selected == 2
+                          ? Icons.wallet_rounded
+                          : Icons.wallet_outlined,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      hi ? 'कमाई' : 'Earn',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 8,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _pill(int index, IconData fill, IconData out, String label,
+      {bool showBadge = false}) {
+    final sel = selected == index;
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onSelect(index);
+      },
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: sel ? _P.purple.withOpacity(0.10) : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
         ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Stack(clipBehavior: Clip.none, children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: Icon(
+                sel ? fill : out,
+                key: ValueKey(sel),
+                size: 22,
+                color: sel ? _P.purple : _P.t3,
+              ),
+            ),
+            if (showBadge && badge > 0)
+              Positioned(
+                top: -5, right: -8,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 16),
+                  height: 16,
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  decoration: BoxDecoration(
+                    color: _P.red,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  child: Center(
+                    child: Text(
+                      badge > 9 ? '9+' : '$badge',
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 8,
+                          fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ),
+              ),
+          ]),
+          const SizedBox(height: 3),
+          AnimatedDefaultTextStyle(
+            duration: const Duration(milliseconds: 200),
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: sel ? FontWeight.w800 : FontWeight.w500,
+              color: sel ? _P.purple : _P.t3,
+              letterSpacing: 0.3,
+            ),
+            child: Text(label),
+          ),
+        ]),
       ),
     );
   }
@@ -1042,6 +1145,17 @@ class _RequestCardState extends State<_RequestCard> {
     });
   }
 
+  Future<void> _decline() async {
+    _countdownTimer?.cancel();
+    await FirebaseFirestore.instance
+        .collection('bookings').doc(widget.bookingId).update({
+      'status':      _Status.cancelled,
+      'cancelledBy': 'helper',
+      'cancelledAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+
   @override
   void dispose() {
     _countdownTimer?.cancel();
@@ -1117,16 +1231,14 @@ class _RequestCardState extends State<_RequestCard> {
 
     final batch = db.batch();
 
-    // Update booking — DO NOT change scheduledAt (set by customer)
     batch.update(db.collection('bookings').doc(widget.bookingId), {
-      'status':       _Status.accepted,
-      'helperId':     helperId,
-      'helperName':   helperName,
-      'acceptedAt':   FieldValue.serverTimestamp(),
-      'confirmedAt':  FieldValue.serverTimestamp(), // FIX 7
+      'status':      _Status.accepted,
+      'helperId':    helperId,
+      'helperName':  helperName,
+      'acceptedAt':  FieldValue.serverTimestamp(),
+      'confirmedAt': FieldValue.serverTimestamp(),
     });
 
-    // FIX 7: Write notification to customer
     if (userId.isNotEmpty) {
       final notifRef = db
           .collection('notifications').doc(userId)
@@ -1144,16 +1256,20 @@ class _RequestCardState extends State<_RequestCard> {
 
     await batch.commit();
     _countdownTimer?.cancel();
-  }
 
-  Future<void> _decline() async {
-    _countdownTimer?.cancel();
-    await FirebaseFirestore.instance
-        .collection('bookings').doc(widget.bookingId).update({
-      'status':      _Status.cancelled,
-      'cancelledBy': 'helper',
-      'cancelledAt': FieldValue.serverTimestamp(),
-    });
+    // ← FIX 6: create the shared /chats doc so user sees the conversation.
+    // Without this call, helpers who accept from the home dashboard (not the
+    // detail screen) never create the chat — user sees no conversation.
+    await BookingChatService.instance.onBookingAccepted(
+      bookingId:     widget.bookingId,
+      helperId:      helperId,
+      helperName:    helperName,
+      helperPhoto:   '',
+      userId:        userId,
+      userName:      '',   // not stored in booking doc per data model
+      serviceName:   svcName,
+      scheduledTime: formatted,
+    );
   }
 
   @override
@@ -2521,37 +2637,83 @@ class _Chip extends StatelessWidget {
 class _OnlineToggleBtn extends StatelessWidget {
   final HelperModel? helper;
   final bool isHindi, isOnline;
-  const _OnlineToggleBtn(
-      {required this.helper, required this.isHindi, required this.isOnline});
 
+  const _OnlineToggleBtn({
+    required this.helper,
+    required this.isHindi,
+    required this.isOnline,
+  });
+
+  // ✅ FINAL LOGIC
   bool _canGoOnline(Map<String, dynamic> d) {
     final kycApproved = helper?.isApproved ?? false;
     if (!kycApproved) return false;
-    final checks = [
+
+    // These 7 fields = 95% base score (photo = bonus 5%)
+    final checks = <bool>[
       (helper?.name ?? '').isNotEmpty,
       (helper?.phone ?? '').isNotEmpty,
       (helper?.area ?? '').isNotEmpty,
       (helper?.services ?? []).isNotEmpty,
-      (d['serviceType'] as String? ?? '').isNotEmpty,
-      (d['description'] as String? ?? '').isNotEmpty,
+      ((d['description'] ?? d['bio'] ?? '') as String).isNotEmpty,
       _safeDouble(d['experience']) > 0,
       _safeDouble(d['pricePerVisit']) > 0,
-      (d['skills'] as List? ?? []).isNotEmpty,
     ];
-    return checks.every((b) => b);
+
+    final completed = checks.where((e) => e).length;
+    final baseScore = (completed / checks.length) * 95;
+    final photoScore = ((d['photoUrl'] as String? ?? '').isNotEmpty) ? 5.0 : 0.0;
+
+    return (baseScore + photoScore) >= 95;
+  }
+
+  String _getBlockMessage(Map<String, dynamic> d) {
+    final kycApproved = helper?.isApproved ?? false;
+
+    if (!kycApproved) {
+      return isHindi
+          ? 'ऑनलाइन जाने के लिए KYC अप्रूवल का इंतजार करें'
+          : 'Wait for KYC approval to go online';
+    }
+
+    final missing = <String>[];
+    if ((helper?.name ?? '').isEmpty)                                        missing.add('Name');
+    if ((helper?.phone ?? '').isEmpty)                                       missing.add('Phone');
+    if ((helper?.area ?? '').isEmpty)                                        missing.add('Area');
+    if ((helper?.services ?? []).isEmpty)                                    missing.add('Services');
+    if (((d['description'] ?? d['bio'] ?? '') as String).isEmpty)            missing.add('About You');
+    if (_safeDouble(d['experience']) <= 0)                                   missing.add('Experience');
+    if (_safeDouble(d['pricePerVisit']) <= 0)                                missing.add('Price/Visit');
+    if ((d['photoUrl'] as String? ?? '').isEmpty)                            missing.add('Photo (+5%)');
+
+    if (missing.isEmpty) return isHindi
+        ? 'प्रोफ़ाइल पूरी करें'
+        : 'Complete your profile';
+
+    return isHindi
+        ? 'बाकी: ${missing.join(", ")}'
+        : 'Missing: ${missing.join(", ")}';
   }
 
   @override
   Widget build(BuildContext context) {
     final uid = helper?.uid ?? '';
-    if (uid.isEmpty) return _lockedChip(context, isHindi);
+    if (uid.isEmpty) return _lockedChip(context, "Invalid user");
+
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
-          .collection('helpers').doc(uid).snapshots(),
+          .collection('helpers')
+          .doc(uid)
+          .snapshots(),
       builder: (ctx, snap) {
         final d = snap.data?.data() as Map<String, dynamic>? ?? {};
+
         final canToggle = _canGoOnline(d);
-        if (!canToggle) return _lockedChip(context, isHindi);
+
+        if (!canToggle) {
+          return _lockedChip(context, _getBlockMessage(d));
+        }
+
         return GestureDetector(
           onTap: () {
             HapticFeedback.mediumImpact();
@@ -2561,15 +2723,19 @@ class _OnlineToggleBtn extends StatelessWidget {
             duration: const Duration(milliseconds: 250),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
-                color: isOnline ? AppColors.onlineGreen : _P.purple,
-                borderRadius: BorderRadius.circular(22)),
+              color: isOnline ? AppColors.onlineGreen : _P.purple,
+              borderRadius: BorderRadius.circular(22),
+            ),
             child: Text(
               isOnline
                   ? (isHindi ? 'ऑनलाइन' : 'ACTIVE')
                   : (isHindi ? 'लाइव जाएं' : 'GO LIVE'),
-              style: const TextStyle(color: Colors.white,
-                  fontSize: 11, fontWeight: FontWeight.w800,
-                  letterSpacing: 0.5),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
+              ),
             ),
           ),
         );
@@ -2577,32 +2743,43 @@ class _OnlineToggleBtn extends StatelessWidget {
     );
   }
 
-  Widget _lockedChip(BuildContext context, bool hi) {
+  // ✅ Updated locked UI
+  Widget _lockedChip(BuildContext context, String message) {
     return GestureDetector(
-      onTap: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(hi
-            ? 'प्रोफ़ाइल 100% पूरी करें और KYC अनुमोदित कराएं'
-            : 'Complete 100% profile & get KYC approved to go online'),
-        backgroundColor: _P.amber,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10)),
-        duration: const Duration(seconds: 3),
-      )),
+      onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: _P.amber,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      ),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: _P.amber.withOpacity(0.4))),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.lock_rounded, color: _P.amber, size: 12),
-          const SizedBox(width: 5),
-          Text(hi ? 'लॉक्ड' : 'LOCKED',
+          color: const Color(0xFFFEF3C7),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: _P.amber.withOpacity(0.4)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lock_rounded, color: _P.amber, size: 12),
+            const SizedBox(width: 5),
+            Text(
+              isHindi ? 'लॉक्ड' : 'LOCKED',
               style: const TextStyle(
-                  color: _P.amber, fontSize: 11,
-                  fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-        ]),
+                color: _P.amber,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2624,10 +2801,12 @@ class _KycPending extends StatelessWidget {
         ('Registration Complete', true), ('Upload Aadhaar & PAN', false),
         ('Admin Approval', false), ('Go Live & Earn', false),
       ],
-      action: _KycBtn(label: 'Upload KYC Documents',
-          icon: Icons.upload_rounded,
-          onTap: (ctx) => Navigator.push(
-              ctx, SmoothRoute(page: const KycScreen()))));
+      actions: [
+        _KycBtn(label: 'Upload KYC Documents',
+            icon: Icons.upload_rounded,
+            onTap: (ctx) => Navigator.push(
+                ctx, SmoothRoute(page: const KycScreen()))),
+      ]);
 }
 
 class _KycUnderReview extends StatefulWidget {
@@ -2648,6 +2827,7 @@ class _KycUnderReviewState extends State<_KycUnderReview> {
   }
   @override
   void dispose() { _t?.cancel(); super.dispose(); }
+
   @override
   Widget build(BuildContext context) => _KycShell(
       helper: widget.helper, color: _P.purple, label: 'Under Review',
@@ -2658,9 +2838,23 @@ class _KycUnderReviewState extends State<_KycUnderReview> {
         ('Registration Complete', true), ('KYC Documents Uploaded', true),
         ('Admin Approval', false), ('Go Live & Earn', false),
       ],
-      action: _KycBtn(
+      actions: [
+        _KycBtn(
           label: 'Check Status', icon: Icons.refresh_rounded, outline: true,
-          onTap: (ctx) => ctx.read<AuthProvider>().refreshProfile()));
+          onTap: (ctx) => ctx.read<AuthProvider>().refreshProfile(),
+        ),
+        _KycBtn(
+          label: 'Go to Dashboard',
+          icon: Icons.dashboard_rounded,
+          onTap: (ctx) {
+            // Pop KYC screen and go to dashboard
+            Navigator.of(ctx).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const _DashboardBypass()),
+                  (_) => false,
+            );
+          },
+        ),
+      ]);
 }
 
 class _KycRejected extends StatelessWidget {
@@ -2674,13 +2868,14 @@ class _KycRejected extends StatelessWidget {
       body: helper.kycRejectedReason ??
           'Please re-upload clear, valid documents.',
       steps: const [],
-      action: _KycBtn(
-          label: 'Re-upload Documents', icon: Icons.upload_rounded,
-          color: AppColors.danger,
-          onTap: (ctx) => Navigator.push(
-              ctx, SmoothRoute(page: const KycScreen()))));
+      actions: [
+        _KycBtn(
+            label: 'Re-upload Documents', icon: Icons.upload_rounded,
+            color: AppColors.danger,
+            onTap: (ctx) => Navigator.push(
+                ctx, SmoothRoute(page: const KycScreen()))),
+      ]);
 }
-
 class _KycInactive extends StatelessWidget {
   final HelperModel helper;
   const _KycInactive({required this.helper});
@@ -2691,7 +2886,7 @@ class _KycInactive extends StatelessWidget {
       title: 'Account Deactivated',
       body: 'Contact support to reactivate your account.',
       steps: const [],
-      action: null);
+      actions: const []);
 }
 
 class _KycShell extends StatelessWidget {
@@ -2700,11 +2895,11 @@ class _KycShell extends StatelessWidget {
   final String label, title, body;
   final IconData icon;
   final List<(String, bool)> steps;
-  final Widget? action;
+  final List<Widget> actions; // ← changed from Widget? action to List<Widget>
   const _KycShell({
     required this.helper, required this.color,
     required this.label, required this.title, required this.body,
-    required this.icon, required this.steps, required this.action,
+    required this.icon, required this.steps, required this.actions,
   });
 
   @override
@@ -2760,8 +2955,11 @@ class _KycShell extends StatelessWidget {
           _KycSteps(steps: steps),
         ],
         const Spacer(),
-        if (action != null) action!,
-        const SizedBox(height: 12),
+        // Render all action buttons
+        ...actions.map((a) => Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: a,
+        )),
         TextButton.icon(
           onPressed: () => context.read<AuthProvider>().logout(),
           icon: const Icon(Icons.logout_rounded, size: 16, color: _P.red),
@@ -2771,6 +2969,101 @@ class _KycShell extends StatelessWidget {
       ]),
     )),
   );
+}
+
+// Bypasses KYC gate — used when helper wants to explore dashboard while waiting
+class _DashboardBypass extends StatelessWidget {
+  const _DashboardBypass({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // Directly render the tabbed dashboard without KYC checks
+    return const _DashboardTabs();
+  }
+}
+
+class _DashboardTabs extends StatefulWidget {
+  const _DashboardTabs({super.key});
+  @override
+  State<_DashboardTabs> createState() => _DashboardTabsState();
+}
+
+class _DashboardTabsState extends State<_DashboardTabs>
+    with SingleTickerProviderStateMixin {
+  int _tab = 0;
+  late final AnimationController _fadeCtrl;
+  late final Animation<double> _fadeAnim;
+  Position? _myPos;
+  int _pendingCount = 0;
+  StreamSubscription<QuerySnapshot>? _badgeSub;
+  StreamSubscription<Position>? _locSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _fadeCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 200));
+    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
+    _fadeCtrl.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initBadge();
+    });
+  }
+
+  @override
+  void dispose() {
+    _fadeCtrl.dispose();
+    _badgeSub?.cancel();
+    _locSub?.cancel();
+    super.dispose();
+  }
+
+  void _initBadge() {
+    _badgeSub = FirebaseFirestore.instance
+        .collection('bookings')
+        .where('status', isEqualTo: _Status.pending)
+        .snapshots()
+        .listen((s) {
+      if (mounted) setState(() => _pendingCount = s.docs.length);
+    });
+  }
+
+  void _switchTab(int i) {
+    if (_tab == i) return;
+    HapticFeedback.selectionClick();
+    _fadeCtrl.reset();
+    setState(() => _tab = i);
+    _fadeCtrl.forward();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final helper = context.watch<AuthProvider>().helper;
+    final lang = context.watch<LanguageProvider>();
+
+    final pages = [
+      _JobsTab(myPos: _myPos, pendingCount: _pendingCount, onGoHome: () => _switchTab(1)),
+      _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0)),
+      const EarningsScreen(),
+      const TrustSafetyScreen(),
+      const HelperProfileScreen(),
+    ];
+
+    return Scaffold(
+      backgroundColor: _P.bg,
+      extendBody: true,
+      body: FadeTransition(
+        opacity: _fadeAnim,
+        child: IndexedStack(index: _tab, children: pages),
+      ),
+      bottomNavigationBar: _BottomNav(
+        selected: _tab,
+        onSelect: _switchTab,
+        lang: lang,
+        badge: _pendingCount,
+      ),
+    );
+  }
 }
 
 class _KycBtn extends StatelessWidget {

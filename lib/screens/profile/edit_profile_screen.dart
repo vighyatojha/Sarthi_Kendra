@@ -355,14 +355,19 @@ class _EditProfileScreenState extends State<EditProfileScreen>
       await FirebaseFirestore.instance.collection('helpers').doc(uid).update({
         'name':              _nameCtrl.text.trim(),
         'phone':             _phoneCtrl.text.trim(),
+        'phoneNumber':       _phoneCtrl.text.trim(),
         'area':              _areaCtrl.text.trim(),
+        'location':          _areaCtrl.text.trim(),
         'bio':               _bioCtrl.text.trim(),
-        'description':       _bioCtrl.text.trim(),   // backward compat
+        'description':       _bioCtrl.text.trim(),
         'experience':        _expYears,
         'pricePerVisit':     price,
         'isNegotiable':      _isNegotiable,
         'isAvailable':       _isAvailable,
         'services':          _selected.toList(),
+        'subcategory':       _selected.isNotEmpty ? _selected.first : '',
+        'serviceType':       _selected.isNotEmpty ? _selected.first : '',
+        'skills':            _selected.toList(), // ← skills = services list
         'availDays':         _availDays.toList(),
         'availSlots':        _availSlots.toList(),
         'preferredLanguage': _lang,
@@ -398,8 +403,9 @@ class _EditProfileScreenState extends State<EditProfileScreen>
     final area  = _areaCtrl.text.trim();
     final bio   = _bioCtrl.text.trim();
     final price = int.tryParse(_priceCtrl.text.trim()) ?? 0;
+
+    // These 9 fields make up 95% of the score
     final checks = [
-      _photoUrl != null || _photoFile != null,
       name.isNotEmpty,
       phone.length == 10,
       area.isNotEmpty,
@@ -410,7 +416,12 @@ class _EditProfileScreenState extends State<EditProfileScreen>
       _availDays.isNotEmpty,
       _availSlots.isNotEmpty,
     ];
-    return checks.where((b) => b).length / checks.length;
+    final baseScore = (checks.where((b) => b).length / checks.length) * 95;
+
+    // Photo is worth 5%
+    final photoScore = (_photoUrl != null || _photoFile != null) ? 5.0 : 0.0;
+
+    return ((baseScore + photoScore) / 100).clamp(0.0, 1.0);
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────

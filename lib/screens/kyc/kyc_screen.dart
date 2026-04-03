@@ -1,31 +1,31 @@
-// lib/screens/kyc/kyc_screen.dart  ← FIXED VERSION
-// CHANGES FROM ORIGINAL (marked ← FIX):
-//   1. kycData map now uses 'aadharNumber'/'panNumber' keys
-//      (admin also accepts 'aadhaar'/'pan' due to || fallback, but explicit is safer)
-//
-// Note: The real root-cause bugs are ALL in auth_provider.dart → submitKyc().
-// This file is mostly correct; the key change is being explicit about field names.
+// lib/screens/kyc/kyc_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../dashboard/helper_dashboard.dart';
 
+const _purple     = Color(0xFF7C3AED);
+const _purpleDeep = Color(0xFF3B0764);
+
+extension _Op on Color {
+  Color op(double a) => withValues(alpha: a);
+}
+
 class KycScreen extends StatefulWidget {
   const KycScreen({super.key});
-
   @override
   State<KycScreen> createState() => _KycScreenState();
 }
 
 class _KycScreenState extends State<KycScreen> {
-  bool _isSubmitting = false;
-  bool _isSkipping   = false;
+  final _formKey      = GlobalKey<FormState>();
+  final _aadhaarCtrl  = TextEditingController();
+  final _panCtrl      = TextEditingController();
 
-  final _aadhaarCtrl = TextEditingController();
-  final _panCtrl     = TextEditingController();
-  final _formKey     = GlobalKey<FormState>();
+  bool _submitting = false;
+  bool _waiting    = false;
 
   @override
   void dispose() {
@@ -34,34 +34,33 @@ class _KycScreenState extends State<KycScreen> {
     super.dispose();
   }
 
-  Future<void> _submitKyc() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _isSubmitting = true);
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _submitting = true);
 
     final auth = context.read<AuthProvider>();
-    final success = await auth.submitKyc({
-      // ← FIX: Use 'aadharNumber' to match admin's primary key.
-      //   Admin reads: docs.aadharNumber || docs.aadhaar
-      //   Using 'aadharNumber' ensures the primary slot is filled.
+    final ok = await auth.submitKyc({
       'aadharNumber': _aadhaarCtrl.text.trim(),
-      'aadhaar':      _aadhaarCtrl.text.trim(), // keep fallback key too
+      'aadhaar':      _aadhaarCtrl.text.trim(),
       'panNumber':    _panCtrl.text.trim(),
-      'pan':          _panCtrl.text.trim(),     // keep fallback key too
+      'pan':          _panCtrl.text.trim(),
     });
 
     if (!mounted) return;
-    setState(() => _isSubmitting = false);
+    setState(() => _submitting = false);
 
-    if (success) {
+    if (ok) {
+      _snack('KYC submitted! We\'ll review within 24 hours.');
       _goToDashboard();
     } else {
-      _showSnack(auth.errorMessage ?? 'Submission failed. Try again.', isError: true);
+      _snack(auth.errorMessage ?? 'Submission failed. Try again.',
+          err: true);
     }
   }
 
-  Future<void> _skipKyc() async {
-    setState(() => _isSkipping = true);
+  Future<void> _wait() async {
+    setState(() => _waiting = true);
     await context.read<AuthProvider>().skipKyc();
     if (!mounted) return;
     _goToDashboard();
@@ -74,395 +73,455 @@ class _KycScreenState extends State<KycScreen> {
     );
   }
 
-  void _showSnack(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content:         Text(msg),
-      backgroundColor: isError ? AppColors.danger : AppColors.success,
-      behavior:        SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ));
-  }
+  void _snack(String msg, {bool err = false}) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        backgroundColor:
+        err ? const Color(0xFFDC2626) : const Color(0xFF059669),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14)),
+        margin: const EdgeInsets.symmetric(
+            horizontal: 16, vertical: 10),
+      ));
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
-      body: Column(
-        children: [
-          _buildHeader(isDark),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildSkipBanner(isDark),
-                    const SizedBox(height: 20),
-                    _buildInfoBox(isDark),
-                    const SizedBox(height: 20),
-                    _buildKycCard(isDark),
-                    const SizedBox(height: 24),
-                    _buildSubmitButton(),
-                    const SizedBox(height: 16),
-                    _buildSkipButton(isDark),
-                    const SizedBox(height: 32),
-                  ],
-                ),
-              ),
+      backgroundColor:
+      isDark ? const Color(0xFF0F0F14) : const Color(0xFFF2F4F8),
+      body: Column(children: [
+        _buildHeader(isDark),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+            child: Form(
+              key: _formKey,
+              child: Column(children: [
+                _buildInfoCard(isDark),
+                const SizedBox(height: 16),
+                _buildFormCard(isDark),
+                const SizedBox(height: 20),
+                _buildSubmitBtn(),
+                const SizedBox(height: 12),
+                _buildWaitBtn(isDark),
+                const SizedBox(height: 20),
+                _buildWaitInfo(isDark),
+              ]),
             ),
           ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 
   Widget _buildHeader(bool isDark) {
     return Container(
-      width:   double.infinity,
+      width: double.infinity,
       padding: EdgeInsets.only(
-        top:    MediaQuery.of(context).padding.top + 16,
-        bottom: 20,
-        left:   20,
-        right:  20,
+        top: MediaQuery.of(context).padding.top + 20,
+        bottom: 24, left: 24, right: 24,
       ),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          begin:  Alignment.topLeft,
-          end:    Alignment.bottomRight,
-          colors: [AppColors.gradientStart, AppColors.gradientMid, AppColors.gradientEnd],
+          colors: [Color(0xFF1E0640), Color(0xFF3B0764), Color(0xFF5B21B6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color:        Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.verified_user_outlined,
-                    color: Colors.white, size: 22),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'KYC Verification',
-                  style: TextStyle(
-                    color:      Colors.white,
-                    fontSize:   20,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: _isSkipping ? null : _skipKyc,
-                style: TextButton.styleFrom(
-                  padding:         const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  backgroundColor: Colors.white.withOpacity(0.15),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                ),
-                child: _isSkipping
-                    ? const SizedBox(
-                  width: 16, height: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
-                )
-                    : const Text(
-                  'Skip for now',
-                  style: TextStyle(
-                    color:      Colors.white,
-                    fontSize:   13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Complete verification to unlock all features',
-            style: TextStyle(
-              color:    Colors.white.withOpacity(0.75),
-              fontSize: 13,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Progress steps
+        Row(children: [
+          _step('1', 'Account', done: true),
+          _stepLine(),
+          _step('2', 'KYC', active: true),
+          _stepLine(),
+          _step('3', 'Go Live'),
+        ]),
+        const SizedBox(height: 20),
+        Row(children: [
+          Container(
+            width: 44, height: 44,
+            decoration: BoxDecoration(
+              color: Colors.white.op(0.15),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: Colors.white.op(0.20)),
             ),
+            child: const Icon(Icons.verified_user_outlined,
+                color: Colors.white, size: 22),
           ),
-        ],
-      ),
+          const SizedBox(width: 12),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('KYC Verification',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800)),
+            Text('Verify your identity to start earning',
+                style: TextStyle(
+                    color: Colors.white.op(0.65), fontSize: 12)),
+          ]),
+        ]),
+      ]),
     );
   }
 
-  Widget _buildSkipBanner(bool isDark) {
+  Widget _step(String num, String label,
+      {bool done = false, bool active = false}) {
+    return Column(children: [
+      AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        width: 28, height: 28,
+        decoration: BoxDecoration(
+          color: done
+              ? const Color(0xFF059669)
+              : active
+              ? Colors.white
+              : Colors.white.op(0.20),
+          shape: BoxShape.circle,
+        ),
+        child: Center(
+          child: done
+              ? const Icon(Icons.check_rounded,
+              color: Colors.white, size: 14)
+              : Text(num,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: active ? _purple : Colors.white.op(0.60))),
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(label,
+          style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: (done || active)
+                  ? Colors.white
+                  : Colors.white.op(0.50))),
+    ]);
+  }
+
+  Widget _stepLine() => Expanded(
+    child: Container(
+      height: 1.5,
+      margin: const EdgeInsets.only(bottom: 18, left: 6, right: 6),
+      color: Colors.white.op(0.25),
+    ),
+  );
+
+  Widget _buildInfoCard(bool isDark) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color:        AppColors.warning.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.warning.withOpacity(0.35)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.warning_amber_rounded,
-              color: AppColors.warning, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'You can skip KYC now and complete it later from your profile. '
-                  'Without KYC, some features may be restricted.',
-              style: TextStyle(
-                color:    isDark
-                    ? AppColors.warning
-                    : const Color(0xFF7A5200),
-                fontSize: 12,
-                height:   1.5,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoBox(bool isDark) {
-    final steps = [
-      (Icons.credit_card_outlined,       'Aadhaar Card Number'),
-      (Icons.assignment_ind_outlined,    'PAN Card Number'),
-      (Icons.access_time_rounded,        'Review within 24–48 hours'),
-    ];
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color:        isDark ? AppColors.cardDark : Colors.white,
+        color: const Color(0xFF7C3AED).op(0.08),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDark ? AppColors.borderDark : AppColors.borderLight,
-        ),
+        border: Border.all(color: const Color(0xFF7C3AED).op(0.25)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color:        AppColors.brandPurple.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.info_outline_rounded,
-                    color: AppColors.brandPurple, size: 18),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                'What you need',
+      child: Column(children: [
+        Row(children: [
+          const Icon(Icons.info_outline_rounded,
+              color: _purple, size: 18),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text('Why KYC is required',
                 style: TextStyle(
-                  color:      isDark ? Colors.white : AppColors.textDarkLight,
-                  fontSize:   15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ...steps.map((s) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(
-              children: [
-                Icon(s.$1, color: AppColors.brandPurple, size: 18),
-                const SizedBox(width: 10),
-                Text(
-                  s.$2,
-                  style: TextStyle(
-                    color:    isDark ? AppColors.textMidDark : AppColors.textMidLight,
+                    color: _purple,
                     fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          )),
-        ],
-      ),
+                    fontWeight: FontWeight.w700)),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        _infoRow(Icons.security_rounded,
+            'Builds trust with customers'),
+        _infoRow(Icons.payments_rounded,
+            'Required to receive payouts'),
+        _infoRow(Icons.verified_rounded,
+            'Unlocks "Go Live" to accept bookings'),
+        _infoRow(Icons.access_time_rounded,
+            'Review takes 24–48 hours'),
+      ]),
     );
   }
 
-  Widget _buildKycCard(bool isDark) {
+  Widget _infoRow(IconData icon, String text) => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: Row(children: [
+      Icon(icon, color: _purple.op(0.70), size: 14),
+      const SizedBox(width: 8),
+      Text(text,
+          style: TextStyle(
+              fontSize: 12,
+              color: _purple.op(0.80))),
+    ]),
+  );
+
+  Widget _buildFormCard(bool isDark) {
+    final sub = isDark
+        ? const Color(0xFF9CA3AF)
+        : const Color(0xFF6B7280);
+    final txt = isDark ? Colors.white : const Color(0xFF111827);
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color:        isDark ? AppColors.cardDark : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        color: isDark ? const Color(0xFF1A1A24) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: isDark ? AppColors.borderDark : AppColors.borderLight,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Enter Your Details',
-            style: TextStyle(
-              color:      isDark ? Colors.white : AppColors.textDarkLight,
-              fontSize:   16,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          _buildFieldLabel(
-            icon:   Icons.credit_card_outlined,
-            label:  'Aadhaar Card Number',
-            isDark: isDark,
-          ),
-          const SizedBox(height: 8),
-          TextFormField(
-            controller:      _aadhaarCtrl,
-            keyboardType:    TextInputType.number,
-            maxLength:       12,
-            style: TextStyle(
-              color: isDark ? Colors.white : AppColors.textDarkLight,
-            ),
-            decoration: InputDecoration(
-              hintText:  'Enter 12-digit Aadhaar number',
-              counterText: '',
-              prefixIcon: const Icon(Icons.credit_card_outlined,
-                  color: AppColors.brandPurple, size: 20),
-            ),
-            validator: (v) {
-              if (v == null || v.isEmpty) return 'Aadhaar number is required';
-              if (v.length != 12)         return 'Enter valid 12-digit Aadhaar';
-              return null;
-            },
-          ),
-
-          const SizedBox(height: 16),
-
-          _buildFieldLabel(
-            icon:   Icons.assignment_ind_outlined,
-            label:  'PAN Card Number',
-            isDark: isDark,
-          ),
-          const SizedBox(height: 8),
-          TextFormField(
-            controller:    _panCtrl,
-            textCapitalization: TextCapitalization.characters,
-            maxLength:     10,
-            style: TextStyle(
-              color: isDark ? Colors.white : AppColors.textDarkLight,
-            ),
-            decoration: InputDecoration(
-              hintText:   'e.g. ABCDE1234F',
-              counterText: '',
-              prefixIcon: const Icon(Icons.assignment_ind_outlined,
-                  color: AppColors.brandPurple, size: 20),
-            ),
-            validator: (v) {
-              if (v == null || v.isEmpty) return 'PAN number is required';
-              final panRegex = RegExp(r'^[A-Z]{5}[0-9]{4}[A-Z]{1}$');
-              if (!panRegex.hasMatch(v.toUpperCase())) {
-                return 'Enter valid PAN (e.g. ABCDE1234F)';
-              }
-              return null;
-            },
-          ),
+            color: isDark
+                ? const Color(0xFF2D2D3D)
+                : const Color(0xFFE8E4F3)),
+        boxShadow: [
+          BoxShadow(
+              color: _purple.op(0.05),
+              blurRadius: 16,
+              offset: const Offset(0, 4))
         ],
       ),
-    );
-  }
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Enter Your Details',
+            style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white : const Color(0xFF1F2937))),
+        const SizedBox(height: 18),
 
-  Widget _buildFieldLabel({
-    required IconData icon,
-    required String   label,
-    required bool     isDark,
-  }) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: AppColors.brandPurple),
-        const SizedBox(width: 6),
-        Text(
-          label,
+        // Aadhaar
+        _label(Icons.credit_card_outlined,
+            'Aadhaar Card Number', sub),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: _aadhaarCtrl,
+          keyboardType: TextInputType.number,
+          maxLength: 12,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           style: TextStyle(
-            color:      isDark ? AppColors.textMidDark : AppColors.textDarkLight,
-            fontSize:   13,
-            fontWeight: FontWeight.w600,
-          ),
+              color: txt, fontSize: 13, fontWeight: FontWeight.w500),
+          decoration: _dec(isDark,
+              hint: '12-digit Aadhaar number',
+              icon: Icons.credit_card_outlined,
+              color: _purple),
+          validator: (v) {
+            if (v == null || v.isEmpty) return 'Aadhaar is required';
+            if (v.length != 12) return 'Enter valid 12-digit Aadhaar';
+            return null;
+          },
         ),
-      ],
+
+        const SizedBox(height: 14),
+
+        // PAN
+        _label(Icons.assignment_ind_outlined, 'PAN Card Number', sub),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: _panCtrl,
+          textCapitalization: TextCapitalization.characters,
+          maxLength: 10,
+          style: TextStyle(
+              color: txt, fontSize: 13, fontWeight: FontWeight.w500),
+          decoration: _dec(isDark,
+              hint: 'ABCDE1234F',
+              icon: Icons.assignment_ind_outlined,
+              color: const Color(0xFF0284C7)),
+          validator: (v) {
+            if (v == null || v.isEmpty) return 'PAN is required';
+            if (!RegExp(r'^[A-Z]{5}[0-9]{4}[A-Z]{1}$')
+                .hasMatch(v.toUpperCase())) {
+              return 'Enter valid PAN (e.g. ABCDE1234F)';
+            }
+            return null;
+          },
+        ),
+      ]),
     );
   }
 
-  Widget _buildSubmitButton() {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: _isSubmitting ? null : _submitKyc,
-        style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+  Widget _label(IconData icon, String text, Color sub) => Row(children: [
+    Icon(icon, size: 11, color: _purple),
+    const SizedBox(width: 5),
+    Text(text,
+        style: TextStyle(
+            fontSize: 11, fontWeight: FontWeight.w600, color: sub)),
+  ]);
+
+  InputDecoration _dec(bool isDark,
+      {required String hint,
+        required IconData icon,
+        required Color color}) =>
+      InputDecoration(
+        hintText: hint,
+        counterText: '',
+        hintStyle: TextStyle(
+            color: isDark
+                ? const Color(0xFF484F58)
+                : const Color(0xFFADB5BD),
+            fontSize: 13),
+        prefixIcon: Icon(icon, color: color, size: 18),
+        contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12, vertical: 11),
+        isDense: true,
+        filled: true,
+        fillColor:
+        isDark ? const Color(0xFF23232F) : color.op(0.03),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+              color: isDark
+                  ? const Color(0xFF2D2D3D)
+                  : color.op(0.18)),
         ),
-        icon: _isSubmitting
-            ? const SizedBox(
-          width: 18, height: 18,
-          child: CircularProgressIndicator(
-              strokeWidth: 2, color: Colors.white),
-        )
-            : const Icon(Icons.verified_user_rounded, size: 20),
-        label: Text(
-          _isSubmitting ? 'Submitting KYC...' : 'Submit KYC Documents',
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: color, width: 1.5),
         ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide:
+          const BorderSide(color: Color(0xFFDC2626)),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(
+              color: Color(0xFFDC2626), width: 1.5),
+        ),
+      );
+
+  Widget _buildSubmitBtn() {
+    return GestureDetector(
+      onTap: _submitting ? null : _submit,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: double.infinity,
+        height: 54,
+        decoration: BoxDecoration(
+          gradient: _submitting
+              ? const LinearGradient(
+              colors: [Color(0xFF9CA3AF), Color(0xFF6B7280)])
+              : const LinearGradient(
+              colors: [
+                Color(0xFF6D28D9),
+                Color(0xFF7C3AED),
+                Color(0xFF9333EA)
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: _submitting
+              ? []
+              : [
+            BoxShadow(
+                color: _purple.op(0.38),
+                blurRadius: 14,
+                offset: const Offset(0, 5))
+          ],
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_submitting)
+                const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+              else
+                const Icon(Icons.verified_user_rounded,
+                    color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                _submitting
+                    ? 'Submitting KYC...'
+                    : 'Submit KYC Documents',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800),
+              ),
+            ]),
       ),
     );
   }
 
-  Widget _buildSkipButton(bool isDark) {
-    return SizedBox(
-      width: double.infinity,
-      child: OutlinedButton.icon(
-        onPressed: _isSkipping ? null : _skipKyc,
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          side: BorderSide(
-            color: isDark ? AppColors.borderDark : AppColors.borderLight,
-            width: 1.5,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+  Widget _buildWaitBtn(bool isDark) {
+    return GestureDetector(
+      onTap: _waiting ? null : _wait,
+      child: Container(
+        width: double.infinity,
+        height: 54,
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1A1A24) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+              color: isDark
+                  ? const Color(0xFF2D2D3D)
+                  : const Color(0xFFE8E4F3),
+              width: 1.5),
         ),
-        icon: _isSkipping
-            ? SizedBox(
-          width:  18,
-          height: 18,
-          child:  CircularProgressIndicator(
-            strokeWidth: 2,
-            color: isDark ? AppColors.textMidDark : AppColors.textMidLight,
-          ),
-        )
-            : Icon(
-          Icons.skip_next_rounded,
-          size:  20,
-          color: isDark ? AppColors.textMidDark : AppColors.textMidLight,
-        ),
-        label: Text(
-          'Skip & Complete Later',
-          style: TextStyle(
-            color:      isDark ? AppColors.textMidDark : AppColors.textMidLight,
-            fontSize:   15,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_waiting)
+                const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: _purple))
+              else
+                Icon(Icons.access_time_rounded,
+                    color: isDark
+                        ? const Color(0xFF9CA3AF)
+                        : const Color(0xFF6B7280),
+                    size: 18),
+              const SizedBox(width: 8),
+              Text(
+                _waiting ? 'Please wait...' : 'Wait — I\'ll do this later',
+                style: TextStyle(
+                    color: isDark
+                        ? const Color(0xFF9CA3AF)
+                        : const Color(0xFF6B7280),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700),
+              ),
+            ]),
       ),
+    );
+  }
+
+  Widget _buildWaitInfo(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF59E0B).op(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: const Color(0xFFF59E0B).op(0.30)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.lock_clock_outlined,
+                color: Color(0xFFF59E0B), size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Dashboard access is limited without KYC',
+                        style: TextStyle(
+                            color: Color(0xFF92400E),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    Text(
+                      'You can browse the app but "Go Live" will stay locked '
+                          'until KYC is approved. Complete it anytime from your profile.',
+                      style: TextStyle(
+                          color: const Color(0xFF92400E).op(0.80),
+                          fontSize: 11,
+                          height: 1.5),
+                    ),
+                  ]),
+            ),
+          ]),
     );
   }
 }

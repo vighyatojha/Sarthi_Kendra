@@ -1000,18 +1000,17 @@ class _CompletionCard extends StatelessWidget {
 
   static double _pct(Map<String, dynamic> d, HelperModel? h) {
     final checks = <bool>[
-      (d['photoUrl'] as String? ?? '').isNotEmpty,
       (h?.name ?? '').isNotEmpty,
-      (h?.phone ?? '').length == 10,
+      (h?.phone ?? '').isNotEmpty,
       (h?.area ?? '').isNotEmpty,
-      ((d['bio'] ?? d['description'] ?? '') as String).isNotEmpty,
+      (h?.services ?? []).isNotEmpty,
+      ((d['description'] ?? d['bio'] ?? '') as String).isNotEmpty,
       _safeDouble(d['experience']) > 0,
       _safeDouble(d['pricePerVisit']) > 0,
-      ((d['services'] as List?)?.isNotEmpty ?? (h?.services ?? []).isNotEmpty),
-      (d['availDays'] as List? ?? []).isNotEmpty,
-      (d['availSlots'] as List? ?? []).isNotEmpty,
     ];
-    return checks.where((b) => b).length / checks.length;
+    final baseScore = (checks.where((b) => b).length / checks.length) * 95;
+    final photoScore = (d['photoUrl'] as String? ?? '').isNotEmpty ? 5.0 : 0.0;
+    return ((baseScore + photoScore) / 100).clamp(0.0, 1.0);
   }
 
   @override
@@ -1029,19 +1028,31 @@ class _CompletionCard extends StatelessWidget {
         final done   = p >= 1.0;
         final pctInt = (p * 100).round();
 
-        if (done) return const SizedBox.shrink();
+        if (done) {
+          return Container(
+            padding: const EdgeInsets.all(16),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green),
+                SizedBox(width: 8),
+                Text("Profile looks great!"),
+              ],
+            ),
+          );
+        }
 
         final missing = <String>[];
-        if ((d['photoUrl'] as String? ?? '').isEmpty)                       missing.add('Photo');
-        if (!(helper?.name.isNotEmpty ?? false))                            missing.add('Name');
-        if ((helper?.phone ?? '').length != 10)                             missing.add('Phone');
-        if (!(helper?.area.isNotEmpty ?? false))                            missing.add('Area');
-        if (((d['bio'] ?? d['description'] ?? '') as String).isEmpty)       missing.add('About You');
-        if (_safeDouble(d['experience']) <= 0)                              missing.add('Experience');
-        if (_safeDouble(d['pricePerVisit']) <= 0)                           missing.add('Price');
-        if ((d['services'] as List? ?? (helper?.services ?? [])).isEmpty)   missing.add('Services');
-        if ((d['availDays'] as List? ?? []).isEmpty)                        missing.add('Work Days');
-        if ((d['availSlots'] as List? ?? []).isEmpty)                       missing.add('Work Hours');
+        final photoMissing = (d['photoUrl'] as String? ?? '').isEmpty;
+        if (!(helper?.name.isNotEmpty ?? false))                                    missing.add('Name');
+        if ((helper?.phone ?? '').length != 10)                                     missing.add('Phone');
+        if (!(helper?.area.isNotEmpty ?? false))                                    missing.add('Area');
+        if (((d['bio'] ?? d['description'] ?? '') as String).isEmpty)               missing.add('About You');
+        if (_safeDouble(d['experience']) <= 0)                                      missing.add('Experience');
+        if (_safeDouble(d['pricePerVisit']) <= 0)                                   missing.add('Price');
+        if ((d['services'] as List? ?? (helper?.services ?? [])).isEmpty)           missing.add('Services');
+        if ((d['availDays'] as List? ?? []).isEmpty)                                missing.add('Work Days');
+        if ((d['availSlots'] as List? ?? []).isEmpty)                               missing.add('Work Hours');
+        if (photoMissing)                                                           missing.add('Photo (optional +5%)');
 
         return Container(
           padding: const EdgeInsets.all(16),
@@ -1085,8 +1096,8 @@ class _CompletionCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      hi ? '100% पूरा करें → ऑनलाइन जाएं'
-                          : "Some fields pending — tap to complete",
+                      hi ? 'प्रोफ़ाइल बेहतर बनाएं'
+                          : "Improve your profile to get more bookings",
                       style: const TextStyle(
                         color: Color(0xFF64748B), fontSize: 10,
                       ),
@@ -1153,7 +1164,7 @@ class _CompletionCard extends StatelessWidget {
                     ),
                     child: Center(
                       child: Text(
-                        hi ? 'अभी पूरा करें' : "Complete Profile",
+                        hi ? 'अभी पूरा करें' : "Edit Profile",
                         style: const TextStyle(
                           color: Colors.white, fontSize: 12,
                           fontWeight: FontWeight.w700,
