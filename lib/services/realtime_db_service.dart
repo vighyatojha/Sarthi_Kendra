@@ -163,7 +163,27 @@ class RealtimeDbService {
 
   // ─── Delete all messages from RTDB (local clear) ─────────────────────────
 
+  // ─── Delete all messages from RTDB (local clear) ─────────────────────────
+
   Future<void> deleteChat(String chatId) async {
     await _msgsRef(chatId).remove();
+  }
+
+  // ─── Send a system warning message ────────────────────────────────────────
+
+  Future<void> sendSystemWarning({
+    required String chatId,
+    required String message,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _msgsRef(chatId).push().set({
+      'text':       message,
+      'senderId':   'system',
+      'senderName': 'Sarthi Kendra',
+      'senderRole': 'system',
+      'type':       'system_warning',
+      'timestamp':  now,
+      'read':       false,
+    });
   }
 }

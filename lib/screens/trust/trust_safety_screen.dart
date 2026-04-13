@@ -4,6 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../../services/realtime_db_service.dart';
+import '../review/mutual_review_sheet.dart';
 import '../../providers/auth_provider.dart';
 
 // ── Light-only palette ────────────────────────────────────────────────────────
@@ -1130,23 +1132,23 @@ class _RateUserSection extends StatelessWidget {
       },
     );
   }
-
   void _showRateSheet(BuildContext context, String bookingId,
       String userId, String userName, String svc) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      useSafeArea: true,
-      isDismissible: false,
-      enableDrag: false,
-      builder: (_) => _HelperRateUserSheet(
-        bookingId: bookingId,
-        userId: userId,
-        userName: userName,
-        serviceName: svc,
-        questions: _questions,
-      ),
+    MutualReviewSheet.showForHelper(
+      context,
+      bookingId:   bookingId,
+      userId:      userId,
+      userName:    userName,
+      serviceName: svc,
+      onAfterClose: () {
+        RealtimeDbService.instance.deleteChat(bookingId).then((_) {
+          FirebaseFirestore.instance
+              .collection('chats')
+              .doc(bookingId)
+              .update({'bookingStatus': 'review_done'})
+              .catchError((_) {});
+        });
+      },
     );
   }
 }

@@ -1,25 +1,12 @@
-// lib/screens/jobs/ongoing_job_screen.dart
-//
-// FIX 10 APPLIED:
-//  • _JobStage enum REMOVED — UI driven entirely from Firestore status field
-//  • status == 'accepted' → show "Navigate to Customer" card + "Start Job" button
-//  • status == 'ongoing'  → show live elapsed timer (from startedAt Timestamp)
-//                           + "Mark as Complete" button
-//  • status == 'completed' → completion dialog auto-shown, then navigate back
-//  • "Start Job" writes {status:'ongoing', startedAt: serverTimestamp()}
-//  • "Mark Complete" writes {status:'completed', completedAt: serverTimestamp()}
-//    + FieldValue.increment(1) on helpers/{uid}.completedJobs  (in a batch)
-//  • data['amount'] → baseAmount only (platform fee never shown to helper)
-//  • data['userName'] removed — userName not stored in bookings (per model)
-//  • _StageIndicator refactored to accept status String, not _JobStage
 
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-
+import '../../services/realtime_db_service.dart';
 import '../../theme/app_theme.dart';
+import '../review/mutual_review_sheet.dart';
 import '../../providers/auth_provider.dart';
 
 class OngoingJobScreen extends StatefulWidget {
@@ -426,9 +413,45 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: () {
+                onPressed: () async {
                   Navigator.pop(context); // close dialog
-                  Navigator.pop(context); // back to dashboard
+                  await Future.delayed(const Duration(milliseconds: 300));
+                  if (!mounted) return;
+
+                  final doc = await FirebaseFirestore.instance
+                      .collection('bookings')
+                      .doc(widget.bookingId)
+                      .get();
+                  if (!mounted) return;
+
+                  final data = doc.data() as Map<String, dynamic>? ?? {};
+                  final userId   = (data['userId']   as String?) ?? '';
+                  final userName = (data['userName'] ??
+                      data['customerName'] ?? 'Customer') as String;
+                  final service  = (data['serviceName'] ?? 'Service') as String;
+
+                  if (userId.isNotEmpty) {
+                    await MutualReviewSheet.showForHelper(
+                      context,
+                      bookingId:   widget.bookingId,
+                      userId:      userId,
+                      userName:    userName,
+                      serviceName: service,
+                      onAfterClose: () {
+                        final chatId = widget.bookingId;
+                        RealtimeDbService.instance.deleteChat(chatId).then((_) {
+                          FirebaseFirestore.instance
+                              .collection('chats')
+                              .doc(chatId)
+                              .update({'bookingStatus': 'review_done'})
+                              .catchError((_) {});
+                        });
+                        if (mounted) Navigator.pop(context);
+                      },
+                    );
+                  } else {
+                    if (mounted) Navigator.pop(context);
+                  }
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.success,

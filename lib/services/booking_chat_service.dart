@@ -1,5 +1,3 @@
-
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/realtime_db_service.dart';
 
@@ -36,8 +34,8 @@ class BookingChatService {
     required String serviceName,
     required String scheduledTime,
   }) async {
-    // ── chatId = bookingId (deterministic — both apps derive it the same way,
-    //    no lookup needed, no random Firestore ID mismatch possible)
+    // chatId = bookingId (deterministic — both apps derive it the same way,
+    // no lookup needed, no random Firestore ID mismatch possible)
     final chatId = bookingId;
 
     // ── Step 1: set (merge) the Firestore chat document ────────────────────
@@ -45,28 +43,24 @@ class BookingChatService {
     // All fields written in one call so both apps always see a complete doc.
     await _fs.collection('chats').doc(chatId).set(
       {
-        'chatId':          chatId,           // self-reference — handy for queries
-        'bookingId':       bookingId,
-        // helperId required by helper _BookingChatList: .where('helperId', isEqualTo: uid)
-        'helperId':        helperId,
-        'helperName':      helperName,
-        'helperPhoto':     helperPhoto ?? '',
-        'userId':          userId,
-        'userName':        userName,
-        // otherName required by user _ConversationTile display name
-        'otherName':       helperName,
-        // helperOnline required by user _ConversationTile online indicator
-        'helperOnline':    true,
-        'serviceName':     serviceName,
-        // participants required by user-side arrayContains query
-        'participants':    [userId, helperId],
-        'lastMessage':     'Booking confirmed! I\'ll be there at $scheduledTime.',
-        'lastMessageTime': FieldValue.serverTimestamp(),
-        'helperUnread':    0,
-        'userUnread':      1,
+        'chatId':              chatId,
+        'bookingId':           bookingId,
+        'helperId':            helperId,
+        'helperName':          helperName,
+        'helperPhoto':         helperPhoto ?? '',
+        'userId':              userId,
+        'userName':            userName,
+        'otherName':           helperName,
+        'helperOnline':        true,
+        'serviceName':         serviceName,
+        'participants':        [userId, helperId],
+        'lastMessage':         'Booking confirmed! I\'ll be there at $scheduledTime.',
+        'lastMessageTime':     FieldValue.serverTimestamp(),
+        'helperUnread':        0,
+        'userUnread':          1,
         'unreadCount_$userId': 1,
-        'bookingStatus':   'accepted',
-        'createdAt':       FieldValue.serverTimestamp(),
+        'bookingStatus':       'accepted',
+        'createdAt':           FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),
     );
@@ -87,6 +81,14 @@ class BookingChatService {
       serviceName:   serviceName,
       scheduledTime: scheduledTime,
       userId:        userId,
+    );
+
+    // ── Step 3b: send chat lifecycle warning ────────────────────────────────
+    await RealtimeDbService.instance.sendSystemWarning(
+      chatId:  chatId,
+      message: '⚠️ Important: This chat will be automatically deleted once '
+          'both parties complete the mutual review after the service. '
+          'Please take a screenshot before review if you need a record.',
     );
 
     // ── Step 4: Firestore notification so badge updates immediately ─────────
@@ -116,7 +118,7 @@ class BookingChatService {
     }).catchError((_) {});
 
     await _fs.collection('bookings').doc(bookingId).update({
-      'status': 'completed',
+      'status':      'completed',
       'completedAt': FieldValue.serverTimestamp(),
     }).catchError((_) {});
 
@@ -126,13 +128,13 @@ class BookingChatService {
         .doc(userId)
         .collection('items')
         .add({
-      'type': 'service_completed',
-      'title': 'Service Completed ✅',
-      'body': 'How was your "$serviceName" experience? Tap to rate!',
+      'type':      'service_completed',
+      'title':     'Service Completed ✅',
+      'body':      'How was your "$serviceName" experience? Tap to rate!',
       'bookingId': bookingId,
-      'chatId': chatId,
-      'rating': 0,
-      'read': false,
+      'chatId':    chatId,
+      'rating':    0,
+      'read':      false,
       'createdAt': FieldValue.serverTimestamp(),
     });
   }
@@ -153,14 +155,14 @@ class BookingChatService {
         .doc(userId)
         .collection('items')
         .add({
-      'type': 'booking_confirmed',
-      'title': 'Booking Confirmed! 🎉',
-      'body': '$helperName has accepted your "$serviceName" booking '
+      'type':      'booking_confirmed',
+      'title':     'Booking Confirmed! 🎉',
+      'body':      '$helperName has accepted your "$serviceName" booking '
           'and will arrive at $scheduledTime.',
       'bookingId': bookingId,
-      'chatId': chatId,
-      'helperId': helperId,
-      'read': false,
+      'chatId':    chatId,
+      'helperId':  helperId,
+      'read':      false,
       'createdAt': FieldValue.serverTimestamp(),
     });
   }

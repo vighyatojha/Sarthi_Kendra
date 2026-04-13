@@ -1,19 +1,11 @@
-// lib/screens/bookings/incoming_booking_detail.dart
-//
-// FIXES APPLIED:
-//  FIX 1  — Status: _decline() → 'cancelled'/'cancelledBy':'helper'
-//            _autoDecline() → 'cancelled'/'cancelledBy':'auto'  (was 'timeout')
-//  FIX 3  — No date picker; shows customer's scheduledAt Timestamp read-only
-//  FIX 5  — Timer only fires when scheduledAt is within 2 hours of now
-//  FIX 6  — Payment badge (Cash/UPI) visible; baseAmount only (platform fee hidden)
-//  FIX 7  — Batch write: booking update + notification doc + confirmedAt
+
 
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-
+import '../../services/booking_chat_service.dart';
 import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 
@@ -59,22 +51,8 @@ class _IncomingBookingDetailState extends State<IncomingBookingDetail>
   /// within 2 hours of now (instant booking).
   /// Future-scheduled bookings (e.g. booked for next week) get NO timer.
   Future<void> _initTimerIfInstant() async {
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('bookings')
-          .doc(widget.bookingId)
-          .get();
-      if (!mounted) return;
-
-      final data        = doc.data() ?? {};
-      final scheduledAt = (data['scheduledAt'] as Timestamp?)?.toDate();
-
-      // If no scheduledAt, or it's within 120 minutes → treat as instant
-      final isInstant = scheduledAt == null ||
-          scheduledAt.difference(DateTime.now()).inMinutes <= 120;
-
-      if (!isInstant) return; // future booking — no timer at all
-
+    // Start optimistically — cancel below if this is a future booking
+    if (mounted) {
       setState(() => _timerActive = true);
       _timerCtrl.forward();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -85,8 +63,29 @@ class _IncomingBookingDetailState extends State<IncomingBookingDetail>
           _autoDecline();
         }
       });
+    }
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .get();
+      if (!mounted) return;
+
+      final data        = doc.data() ?? {};
+      final scheduledAt = (data['scheduledAt'] as Timestamp?)?.toDate();
+
+      final isInstant = scheduledAt == null ||
+          scheduledAt.difference(DateTime.now()).inMinutes <= 120;
+
+      if (!isInstant) {
+        // Future booking — cancel the optimistic timer
+        _timer?.cancel();
+        _timerCtrl.stop();
+        if (mounted) setState(() { _timerActive = false; _secondsLeft = 60; });
+        return;
+      }
     } catch (_) {
-      // If fetch fails, don't start timer — don't punish the helper
+      // If fetch fails, keep the running timer as a safety net
     }
   }
 
@@ -163,6 +162,21 @@ class _IncomingBookingDetailState extends State<IncomingBookingDetail>
       }
 
       await batch.commit();
+
+      // Create the chat and send confirmation message
+      try {
+        await BookingChatService.instance.onBookingAccepted(
+          bookingId:     widget.bookingId,
+          helperId:      helperUid,
+          helperName:    helperName,
+          userId:        userId,
+          userName:      (data['userName'] ?? 'Customer') as String,
+          serviceName:   serviceName,
+          scheduledTime: formatted,
+        );
+      } catch (e) {
+        debugPrint('[IncomingBookingDetail] BookingChatService error: $e');
+      }
 
       if (mounted) {
         setState(() => _isAccepting = false);

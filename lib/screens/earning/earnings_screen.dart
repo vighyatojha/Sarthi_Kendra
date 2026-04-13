@@ -1,4 +1,14 @@
 // lib/screens/earning/earnings_screen.dart
+// FIXES APPLIED:
+//  ✅ All Firestore queries that combined .where() on one field + .where() on
+//     another with isGreaterThanOrEqualTo previously required composite indexes.
+//     Fixed by: fetching the broader set and filtering dates in-memory.
+//  ✅ _weekStream and _monthStream no longer use range filters on Firestore —
+//     they fetch all completed bookings and filter by date client-side.
+//  ✅ Chart card query fixed similarly.
+//  ✅ Today's header query fixed.
+//  ✅ Design preserved with original purple palette.
+
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,7 +16,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../providers/auth_provider.dart';
 
-// ── Light-only palette ────────────────────────────────────────────────────────
+// ── Palette ───────────────────────────────────────────────────────────────────
 const _purple = Color(0xFF7C3AED);
 const _indigo = Color(0xFF2D1B69);
 const _violet = Color(0xFF5B21B6);
@@ -22,6 +32,15 @@ const _border = Color(0xFFEDE9FE);
 double _sd(dynamic v) =>
     v == null ? 0.0 : v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0.0;
 
+// Helper: check if a Timestamp falls within a date range
+bool _inRange(Timestamp? ts, DateTime start, [DateTime? end]) {
+  if (ts == null) return false;
+  final dt = ts.toDate().toLocal();
+  if (dt.isBefore(start)) return false;
+  if (end != null && dt.isAfter(end)) return false;
+  return true;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
@@ -30,7 +49,7 @@ class EarningsScreen extends StatefulWidget {
 }
 
 class _EarningsScreenState extends State<EarningsScreen> {
-  int _period = 0; // 0 = Weekly  1 = Monthly
+  int _period = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -69,17 +88,16 @@ class _EarningsScreenState extends State<EarningsScreen> {
   }
 }
 
-// ── Header with live today's total ───────────────────────────────────────────
+// ── Header ────────────────────────────────────────────────────────────────────
 class _EarnHeader extends StatelessWidget {
   final String uid;
   const _EarnHeader({required this.uid});
 
   @override
   Widget build(BuildContext context) {
-    final today = DateTime.now();
-    final start =
-    Timestamp.fromDate(DateTime(today.year, today.month, today.day));
-
+    // ✅ FIX: Fetch ALL completed bookings for this helper, filter today in-memory.
+    // Old query used .where('completedAt', isGreaterThanOrEqualTo: start)
+    // combined with helperId filter → required a composite index.
     return StreamBuilder<QuerySnapshot>(
       stream: uid.isEmpty
           ? const Stream.empty()
@@ -87,15 +105,22 @@ class _EarnHeader extends StatelessWidget {
           .collection('bookings')
           .where('helperId', isEqualTo: uid)
           .where('status', isEqualTo: 'completed')
-          .where('completedAt', isGreaterThanOrEqualTo: start)
           .snapshots(),
       builder: (ctx, snap) {
+        final today     = DateTime.now();
+        final todayStart = DateTime(today.year, today.month, today.day);
+
         double todayTotal = 0;
         int todayJobs = 0;
         if (snap.hasData) {
           for (final d in snap.data!.docs) {
-            todayTotal += _sd((d.data() as Map)['baseAmount']);
-            todayJobs++;
+            final m  = d.data() as Map;
+            final ts = d['completedAt'] as Timestamp?;
+            // ✅ Date filter in-memory
+            if (_inRange(ts, todayStart)) {
+              todayTotal += _sd(m['baseAmount']);
+              todayJobs++;
+            }
           }
         }
 
@@ -104,7 +129,7 @@ class _EarnHeader extends StatelessWidget {
           child: Container(
             padding: EdgeInsets.only(
               top: MediaQuery.of(context).padding.top + 18,
-              bottom: 48,  // extra for curve
+              bottom: 48,
               left: 20,
               right: 20,
             ),
@@ -116,40 +141,30 @@ class _EarnHeader extends StatelessWidget {
               ),
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // Top row
               Row(children: [
                 const Text('Earnings',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
+                    style: TextStyle(color: Colors.white, fontSize: 22,
                         fontWeight: FontWeight.w800)),
                 const Spacer(),
                 if (snap.connectionState == ConnectionState.active)
                   Container(
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Container(
-                          width: 6,
-                          height: 6,
+                      Container(width: 6, height: 6,
                           decoration: const BoxDecoration(
-                              color: Color(0xFF4ADE80),
-                              shape: BoxShape.circle)),
+                              color: Color(0xFF4ADE80), shape: BoxShape.circle)),
                       const SizedBox(width: 5),
                       const Text('LIVE',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
+                          style: TextStyle(color: Colors.white, fontSize: 10,
                               fontWeight: FontWeight.w800)),
                     ]),
                   ),
               ]),
               const SizedBox(height: 22),
-              // Today's card inside header
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -159,36 +174,23 @@ class _EarnHeader extends StatelessWidget {
                 ),
                 child: Row(children: [
                   Expanded(child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "TODAY'S EARNINGS",
-                          style: TextStyle(
-                              color: Colors.white.withOpacity(0.7),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.1),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '₹ ${todayTotal.toStringAsFixed(0)}',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 34,
-                              fontWeight: FontWeight.w900,
-                              height: 1.1),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '$todayJobs job${todayJobs == 1 ? '' : 's'} completed',
-                          style: TextStyle(
-                              color: Colors.white.withOpacity(0.7),
-                              fontSize: 12),
-                        ),
-                      ])),
+                      crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text("TODAY'S EARNINGS",
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(0.7),
+                            fontSize: 10, fontWeight: FontWeight.w700,
+                            letterSpacing: 1.1)),
+                    const SizedBox(height: 6),
+                    Text('₹ ${todayTotal.toStringAsFixed(0)}',
+                        style: const TextStyle(color: Colors.white,
+                            fontSize: 34, fontWeight: FontWeight.w900, height: 1.1)),
+                    const SizedBox(height: 4),
+                    Text('$todayJobs job${todayJobs == 1 ? '' : 's'} completed',
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(0.7), fontSize: 12)),
+                  ])),
                   Container(
-                    width: 52,
-                    height: 52,
+                    width: 52, height: 52,
                     decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.15),
                         shape: BoxShape.circle),
@@ -216,12 +218,11 @@ class _EarnCurveClipper extends CustomClipper<Path> {
       ..close();
     return path;
   }
-
   @override
   bool shouldReclip(CustomClipper<Path> old) => false;
 }
 
-// ── Balance card ─────────────────────────────────────────────────────────────
+// ── Balance card ──────────────────────────────────────────────────────────────
 class _BalanceCard extends StatelessWidget {
   final String uid;
   const _BalanceCard({required this.uid});
@@ -231,12 +232,9 @@ class _BalanceCard extends StatelessWidget {
     return StreamBuilder<DocumentSnapshot>(
       stream: uid.isEmpty
           ? const Stream.empty()
-          : FirebaseFirestore.instance
-          .collection('helpers')
-          .doc(uid)
-          .snapshots(),
+          : FirebaseFirestore.instance.collection('helpers').doc(uid).snapshots(),
       builder: (ctx, snap) {
-        final d = snap.data?.data() as Map<String, dynamic>? ?? {};
+        final d       = snap.data?.data() as Map<String, dynamic>? ?? {};
         final balance = _sd(d['totalBalance'] ?? d['walletBalance'] ?? 0);
         final pending = _sd(d['pendingBalance'] ?? 0);
 
@@ -246,105 +244,67 @@ class _BalanceCard extends StatelessWidget {
             color: Colors.white,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: _border),
-            boxShadow: [
-              BoxShadow(
-                  color: _purple.withOpacity(0.08),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4))
-            ],
+            boxShadow: [BoxShadow(
+                color: _purple.withOpacity(0.08),
+                blurRadius: 16, offset: const Offset(0, 4))],
           ),
           child: Column(children: [
             Row(children: [
-              Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('TOTAL BALANCE',
-                          style: TextStyle(
-                              color: _t3,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.1)),
-                      const SizedBox(height: 6),
-                      Text(
-                        '₹ ${NumberFormat('#,##,###.##').format(balance)}',
-                        style: const TextStyle(
-                            color: _t1, fontSize: 28, fontWeight: FontWeight.w900),
-                      ),
-                      if (pending > 0) ...[
-                        const SizedBox(height: 4),
-                        Row(children: [
-                          const Icon(Icons.schedule_rounded,
-                              size: 12, color: _amber),
-                          const SizedBox(width: 4),
-                          Text(
-                            '₹${pending.toStringAsFixed(0)} pending clearance',
-                            style: const TextStyle(
-                                color: _amber,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600),
-                          ),
-                        ]),
-                      ],
-                    ]),
-              ),
-              // Withdraw button
+              Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('TOTAL BALANCE',
+                    style: TextStyle(color: _t3, fontSize: 10,
+                        fontWeight: FontWeight.w700, letterSpacing: 1.1)),
+                const SizedBox(height: 6),
+                Text('₹ ${NumberFormat('#,##,###.##').format(balance)}',
+                    style: const TextStyle(color: _t1, fontSize: 28,
+                        fontWeight: FontWeight.w900)),
+                if (pending > 0) ...[
+                  const SizedBox(height: 4),
+                  Row(children: [
+                    const Icon(Icons.schedule_rounded, size: 12, color: _amber),
+                    const SizedBox(width: 4),
+                    Text('₹${pending.toStringAsFixed(0)} pending clearance',
+                        style: const TextStyle(color: _amber, fontSize: 11,
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                ],
+              ])),
               GestureDetector(
                 onTap: () => _showWithdrawSheet(context, balance),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                        colors: [_violet, _purple]),
+                    gradient: const LinearGradient(colors: [_violet, _purple]),
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: [
-                      BoxShadow(
-                          color: _purple.withOpacity(0.3),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4))
-                    ],
+                    boxShadow: [BoxShadow(
+                        color: _purple.withOpacity(0.3),
+                        blurRadius: 10, offset: const Offset(0, 4))],
                   ),
                   child: const Row(children: [
-                    Icon(Icons.account_balance_rounded,
-                        color: Colors.white, size: 16),
+                    Icon(Icons.account_balance_rounded, color: Colors.white, size: 16),
                     SizedBox(width: 6),
                     Text('Withdraw',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
+                        style: TextStyle(color: Colors.white, fontSize: 13,
                             fontWeight: FontWeight.w700)),
                   ]),
                 ),
               ),
             ]),
             const SizedBox(height: 16),
-            // Divider
             Container(height: 1, color: _border),
             const SizedBox(height: 16),
-            // Mini stats row
             Row(children: [
-              _MiniStat(
-                label: 'This Month',
-                valueStream: uid.isEmpty
-                    ? const Stream.empty()
-                    : _monthStream(uid),
-              ),
+              _MiniStat(label: 'This Month', valueStream: uid.isEmpty
+                  ? const Stream.empty() : _completedStream(uid)),
               _vDivider(),
-              _MiniStat(
-                label: 'This Week',
-                valueStream: uid.isEmpty
-                    ? const Stream.empty()
-                    : _weekStream(uid),
-              ),
+              _MiniStat(label: 'This Week', valueStream: uid.isEmpty
+                  ? const Stream.empty() : _completedStream(uid),
+                  isWeek: true),
               _vDivider(),
-              _MiniStat(
-                label: 'Total Jobs',
-                valueStream: uid.isEmpty
-                    ? const Stream.empty()
-                    : _jobsStream(uid),
-                isCount: true,
-              ),
+              _MiniStat(label: 'Total Jobs', valueStream: uid.isEmpty
+                  ? const Stream.empty() : _completedStream(uid),
+                  isCount: true),
             ]),
           ]),
         );
@@ -353,32 +313,11 @@ class _BalanceCard extends StatelessWidget {
   }
 
   Widget _vDivider() => Container(
-      width: 1, height: 36, color: _border, margin: const EdgeInsets.symmetric(horizontal: 4));
+      width: 1, height: 36, color: _border,
+      margin: const EdgeInsets.symmetric(horizontal: 4));
 
-  Stream<QuerySnapshot> _monthStream(String uid) {
-    final now = DateTime.now();
-    final start = Timestamp.fromDate(DateTime(now.year, now.month, 1));
-    return FirebaseFirestore.instance
-        .collection('bookings')
-        .where('helperId', isEqualTo: uid)
-        .where('status', isEqualTo: 'completed')
-        .where('completedAt', isGreaterThanOrEqualTo: start)
-        .snapshots();
-  }
-
-  Stream<QuerySnapshot> _weekStream(String uid) {
-    final now = DateTime.now();
-    final start = Timestamp.fromDate(
-        now.subtract(Duration(days: now.weekday - 1)));
-    return FirebaseFirestore.instance
-        .collection('bookings')
-        .where('helperId', isEqualTo: uid)
-        .where('status', isEqualTo: 'completed')
-        .where('completedAt', isGreaterThanOrEqualTo: start)
-        .snapshots();
-  }
-
-  Stream<QuerySnapshot> _jobsStream(String uid) =>
+  // ✅ FIX: Single stream — all completed bookings. Filter by date in-memory.
+  Stream<QuerySnapshot> _completedStream(String uid) =>
       FirebaseFirestore.instance
           .collection('bookings')
           .where('helperId', isEqualTo: uid)
@@ -400,10 +339,9 @@ class _MiniStat extends StatelessWidget {
   final String label;
   final Stream<QuerySnapshot> valueStream;
   final bool isCount;
-  const _MiniStat(
-      {required this.label,
-        required this.valueStream,
-        this.isCount = false});
+  final bool isWeek;
+  const _MiniStat({required this.label, required this.valueStream,
+    this.isCount = false, this.isWeek = false});
 
   @override
   Widget build(BuildContext context) {
@@ -411,12 +349,25 @@ class _MiniStat extends StatelessWidget {
       child: StreamBuilder<QuerySnapshot>(
         stream: valueStream,
         builder: (ctx, snap) {
+          final now   = DateTime.now();
+          final monthStart = DateTime(now.year, now.month, 1);
+          final weekStart  = now.subtract(Duration(days: now.weekday - 1));
+          final weekDay0   = DateTime(weekStart.year, weekStart.month, weekStart.day);
+
           double total = 0;
-          int count = 0;
+          int count    = 0;
           if (snap.hasData) {
-            count = snap.data!.docs.length;
             for (final d in snap.data!.docs) {
-              total += _sd((d.data() as Map)['baseAmount']);
+              final m  = d.data() as Map;
+              final ts = m['completedAt'] as Timestamp?;
+              // ✅ Filter dates in-memory
+              final inRange = isWeek
+                  ? _inRange(ts, weekDay0)
+                  : isCount ? true : _inRange(ts, monthStart);
+              if (inRange) {
+                count++;
+                total += _sd(m['baseAmount']);
+              }
             }
           }
           return Column(children: [
@@ -424,12 +375,11 @@ class _MiniStat extends StatelessWidget {
               isCount
                   ? '$count'
                   : '₹${NumberFormat('#,###').format(total)}',
-              style: const TextStyle(
-                  color: _purple, fontSize: 15, fontWeight: FontWeight.w800),
+              style: const TextStyle(color: _purple, fontSize: 15,
+                  fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 3),
-            Text(label,
-                style: const TextStyle(color: _t3, fontSize: 10)),
+            Text(label, style: const TextStyle(color: _t3, fontSize: 10)),
           ]);
         },
       ),
@@ -464,8 +414,7 @@ class _PeriodToggle extends StatelessWidget {
                 color: sel ? _purple : Colors.transparent,
                 borderRadius: BorderRadius.circular(11),
                 boxShadow: sel
-                    ? [BoxShadow(
-                    color: _purple.withOpacity(0.25),
+                    ? [BoxShadow(color: _purple.withOpacity(0.25),
                     blurRadius: 8, offset: const Offset(0, 3))]
                     : null,
               ),
@@ -474,8 +423,7 @@ class _PeriodToggle extends StatelessWidget {
                     style: TextStyle(
                       color: sel ? Colors.white : _t3,
                       fontSize: 13,
-                      fontWeight:
-                      sel ? FontWeight.w700 : FontWeight.w500,
+                      fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
                     )),
               ),
             ),
@@ -486,7 +434,7 @@ class _PeriodToggle extends StatelessWidget {
   );
 }
 
-// ── Chart card — real-time from Firestore ────────────────────────────────────
+// ── Chart card ────────────────────────────────────────────────────────────────
 class _ChartCard extends StatelessWidget {
   final String uid;
   final int period;
@@ -497,58 +445,53 @@ class _ChartCard extends StatelessWidget {
     if (uid.isEmpty) return const SizedBox.shrink();
 
     final now = DateTime.now();
-    final Timestamp rangeStart;
     final int barCount;
     final List<String> labels;
+    final DateTime rangeStartDt;
 
     if (period == 0) {
-      // Weekly: Mon–Sun of current week
       final weekStart = now.subtract(Duration(days: now.weekday - 1));
-      rangeStart = Timestamp.fromDate(
-          DateTime(weekStart.year, weekStart.month, weekStart.day));
+      rangeStartDt = DateTime(weekStart.year, weekStart.month, weekStart.day);
       barCount = 7;
       labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
     } else {
-      // Monthly: 4 weeks of current month
-      rangeStart = Timestamp.fromDate(DateTime(now.year, now.month, 1));
+      rangeStartDt = DateTime(now.year, now.month, 1);
       barCount = 4;
       labels = ['Wk 1', 'Wk 2', 'Wk 3', 'Wk 4'];
     }
 
+    // ✅ FIX: Query only by helperId + status. Date filter done in-memory.
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('bookings')
           .where('helperId', isEqualTo: uid)
           .where('status', isEqualTo: 'completed')
-          .where('completedAt', isGreaterThanOrEqualTo: rangeStart)
-          .orderBy('completedAt')
           .snapshots(),
       builder: (ctx, snap) {
         final bars = List<double>.filled(barCount, 0.0);
 
         if (snap.hasData) {
           for (final doc in snap.data!.docs) {
-            final d = doc.data() as Map<String, dynamic>;
-            final ts =
-            (d['completedAt'] as Timestamp?)?.toDate()?.toLocal();
-            if (ts == null) continue;
+            final d  = doc.data() as Map<String, dynamic>;
+            final ts = (d['completedAt'] as Timestamp?)?.toDate()?.toLocal();
+            if (ts == null || ts.isBefore(rangeStartDt)) continue;
             final amt = _sd(d['baseAmount']);
 
             if (period == 0) {
-              final idx = ts.weekday - 1; // 0=Mon
+              final idx = ts.weekday - 1;
               if (idx >= 0 && idx < 7) bars[idx] += amt;
             } else {
-              final day = ts.day;
-              final idx =
-              ((day - 1) / 7).floor().clamp(0, 3);
+              final idx = ((ts.day - 1) / 7).floor().clamp(0, 3);
               bars[idx] += amt;
             }
           }
         }
 
-        final total = bars.fold(0.0, (a, b) => a + b);
+        final total  = bars.fold(0.0, (a, b) => a + b);
         final maxVal = bars.fold(0.0, (a, b) => a > b ? a : b);
-        final todayBar = period == 0 ? now.weekday - 1 : ((now.day - 1) / 7).floor().clamp(0, 3);
+        final todayBar = period == 0
+            ? now.weekday - 1
+            : ((now.day - 1) / 7).floor().clamp(0, 3);
 
         return Container(
           padding: const EdgeInsets.all(20),
@@ -556,52 +499,36 @@ class _ChartCard extends StatelessWidget {
             color: Colors.white,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: _border),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 12,
-                  offset: const Offset(0, 3))
-            ],
+            boxShadow: [BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 12, offset: const Offset(0, 3))],
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(
-                  period == 0 ? 'This Week' : 'This Month',
-                  style: const TextStyle(
-                      color: _t2,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600),
-                ),
+                Text(period == 0 ? 'This Week' : 'This Month',
+                    style: const TextStyle(color: _t2, fontSize: 12,
+                        fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
-                Text(
-                  '₹ ${NumberFormat('#,##,###').format(total)}',
-                  style: const TextStyle(
-                      color: _t1,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900),
-                ),
+                Text('₹ ${NumberFormat('#,##,###').format(total)}',
+                    style: const TextStyle(color: _t1, fontSize: 22,
+                        fontWeight: FontWeight.w900)),
               ]),
               const Spacer(),
               if (snap.connectionState == ConnectionState.active)
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: _green.withOpacity(0.10),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Container(
-                        width: 5,
-                        height: 5,
+                    Container(width: 5, height: 5,
                         decoration: const BoxDecoration(
                             color: _green, shape: BoxShape.circle)),
                     const SizedBox(width: 4),
                     const Text('LIVE',
-                        style: TextStyle(
-                            color: _green,
-                            fontSize: 9,
+                        style: TextStyle(color: _green, fontSize: 9,
                             fontWeight: FontWeight.w800)),
                   ]),
                 ),
@@ -612,9 +539,9 @@ class _ChartCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: List.generate(barCount, (i) {
-                  final val    = bars[i];
-                  final barH   = maxVal > 0 ? (val / maxVal) * 90 : 0.0;
-                  final isNow  = i == todayBar;
+                  final val   = bars[i];
+                  final barH  = maxVal > 0 ? (val / maxVal) * 90 : 0.0;
+                  final isNow = i == todayBar;
                   final hasAmt = val > 0;
 
                   return Expanded(
@@ -624,13 +551,9 @@ class _ChartCard extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           if (hasAmt) ...[
-                            Text(
-                              '₹${val.toInt()}',
-                              style: const TextStyle(
-                                  color: _purple,
-                                  fontSize: 7,
-                                  fontWeight: FontWeight.w800),
-                            ),
+                            Text('₹${val.toInt()}',
+                                style: const TextStyle(color: _purple,
+                                    fontSize: 7, fontWeight: FontWeight.w800)),
                             const SizedBox(height: 3),
                           ],
                           AnimatedContainer(
@@ -643,33 +566,24 @@ class _ChartCard extends StatelessWidget {
                                 colors: [_purple, Color(0xFF9D6FE8)],
                                 begin: Alignment.bottomCenter,
                                 end: Alignment.topCenter,
-                              )
-                                  : null,
+                              ) : null,
                               color: (!hasAmt && !isNow)
-                                  ? const Color(0xFFEDE9FE)
-                                  : null,
+                                  ? const Color(0xFFEDE9FE) : null,
                               borderRadius: BorderRadius.circular(8),
                               boxShadow: hasAmt
-                                  ? [
-                                BoxShadow(
-                                    color: _purple.withOpacity(0.22),
-                                    blurRadius: 6,
-                                    offset: const Offset(0, 3))
-                              ]
+                                  ? [BoxShadow(color: _purple.withOpacity(0.22),
+                                  blurRadius: 6, offset: const Offset(0, 3))]
                                   : null,
                             ),
                           ),
                           const SizedBox(height: 8),
-                          Text(
-                            labels[i],
-                            style: TextStyle(
-                              color: isNow ? _purple : _t3,
-                              fontSize: 10,
-                              fontWeight: isNow
-                                  ? FontWeight.w800
-                                  : FontWeight.w500,
-                            ),
-                          ),
+                          Text(labels[i],
+                              style: TextStyle(
+                                color: isNow ? _purple : _t3,
+                                fontSize: 10,
+                                fontWeight: isNow
+                                    ? FontWeight.w800 : FontWeight.w500,
+                              )),
                         ],
                       ),
                     ),
@@ -684,7 +598,7 @@ class _ChartCard extends StatelessWidget {
   }
 }
 
-// ── Quick stats row ───────────────────────────────────────────────────────────
+// ── Quick stats ───────────────────────────────────────────────────────────────
 class _QuickStatsRow extends StatelessWidget {
   final String uid;
   const _QuickStatsRow({required this.uid});
@@ -693,35 +607,23 @@ class _QuickStatsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     if (uid.isEmpty) return const SizedBox.shrink();
     return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('helpers')
-          .doc(uid)
-          .snapshots(),
+      stream: FirebaseFirestore.instance.collection('helpers').doc(uid).snapshots(),
       builder: (ctx, snap) {
-        final d = snap.data?.data() as Map<String, dynamic>? ?? {};
-        final rating   = _sd(d['rating']);
-        final reviews  = (d['totalReviews'] as num?)?.toInt() ?? 0;
-        final done     = (d['completedJobs'] as num?)?.toInt() ??
-            (d['totalJobs'] as num?)?.toInt() ?? 0;
+        final d       = snap.data?.data() as Map<String, dynamic>? ?? {};
+        final rating  = _sd(d['rating']);
+        final reviews = (d['totalReviews'] as num?)?.toInt() ?? 0;
+        final done    = (d['completedJobs'] as num?)?.toInt()
+            ?? (d['totalJobs'] as num?)?.toInt() ?? 0;
 
         return Row(children: [
-          _StatTile(
-            icon: Icons.star_rounded,
-            iconColor: _amber,
-            bgColor: _amber.withOpacity(0.10),
-            label: 'Avg Rating',
-            value: rating == 0 ? '—' : rating.toStringAsFixed(1),
-            sub: '$reviews reviews',
-          ),
+          _StatTile(icon: Icons.star_rounded, iconColor: _amber,
+              bgColor: _amber.withOpacity(0.10), label: 'Avg Rating',
+              value: rating == 0 ? '—' : rating.toStringAsFixed(1),
+              sub: '$reviews reviews'),
           const SizedBox(width: 12),
-          _StatTile(
-            icon: Icons.check_circle_rounded,
-            iconColor: _green,
-            bgColor: _green.withOpacity(0.10),
-            label: 'Jobs Done',
-            value: '$done',
-            sub: 'all time',
-          ),
+          _StatTile(icon: Icons.check_circle_rounded, iconColor: _green,
+              bgColor: _green.withOpacity(0.10), label: 'Jobs Done',
+              value: '$done', sub: 'all time'),
         ]);
       },
     );
@@ -732,11 +634,9 @@ class _StatTile extends StatelessWidget {
   final IconData icon;
   final Color iconColor, bgColor;
   final String label, value, sub;
-  const _StatTile({
-    required this.icon, required this.iconColor,
+  const _StatTile({required this.icon, required this.iconColor,
     required this.bgColor, required this.label,
-    required this.value, required this.sub,
-  });
+    required this.value, required this.sub});
 
   @override
   Widget build(BuildContext context) => Expanded(
@@ -746,43 +646,31 @@ class _StatTile extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _border),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.03),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03),
+            blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Row(children: [
         Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(
-              color: bgColor, borderRadius: BorderRadius.circular(12)),
+          width: 42, height: 42,
+          decoration: BoxDecoration(color: bgColor,
+              borderRadius: BorderRadius.circular(12)),
           child: Icon(icon, color: iconColor, size: 20),
         ),
         const SizedBox(width: 12),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label,
-              style: const TextStyle(
-                  color: _t3,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600)),
+          Text(label, style: const TextStyle(color: _t3, fontSize: 10,
+              fontWeight: FontWeight.w600)),
           const SizedBox(height: 3),
-          Text(value,
-              style: const TextStyle(
-                  color: _t1,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800)),
-          Text(sub,
-              style: const TextStyle(color: _t3, fontSize: 10)),
+          Text(value, style: const TextStyle(color: _t1, fontSize: 20,
+              fontWeight: FontWeight.w800)),
+          Text(sub, style: const TextStyle(color: _t3, fontSize: 10)),
         ]),
       ]),
     ),
   );
 }
 
-// ── Transaction list — real-time ─────────────────────────────────────────────
+// ── Transaction list ──────────────────────────────────────────────────────────
 class _TransactionList extends StatelessWidget {
   final String uid;
   const _TransactionList({required this.uid});
@@ -802,118 +690,99 @@ class _TransactionList extends StatelessWidget {
   Widget build(BuildContext context) {
     if (uid.isEmpty) return _emptyState();
 
+    // ✅ FIX: No .orderBy() → sort in-memory after fetch
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('bookings')
           .where('helperId', isEqualTo: uid)
           .where('status', isEqualTo: 'completed')
-          .orderBy('completedAt', descending: true)
-          .limit(12)
+          .limit(50)
           .snapshots(),
       builder: (ctx, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return _shimmer();
-        }
+        if (snap.connectionState == ConnectionState.waiting) return _shimmer();
 
-        final docs = snap.data?.docs ?? [];
+        var docs = snap.data?.docs ?? [];
         if (docs.isEmpty) return _emptyState();
+
+        // ✅ Sort descending by completedAt in-memory
+        docs = List.from(docs)..sort((a, b) {
+          final ta = ((a.data() as Map)['completedAt'] as Timestamp?)
+              ?.millisecondsSinceEpoch ?? 0;
+          final tb = ((b.data() as Map)['completedAt'] as Timestamp?)
+              ?.millisecondsSinceEpoch ?? 0;
+          return tb.compareTo(ta);
+        });
+
+        // Take top 12
+        if (docs.length > 12) docs = docs.sublist(0, 12);
 
         return Container(
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: _border),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.03),
-                  blurRadius: 10,
-                  offset: const Offset(0, 2))
-            ],
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03),
+                blurRadius: 10, offset: const Offset(0, 2))],
           ),
           child: Column(
             children: docs.asMap().entries.map((e) {
-              final doc  = e.value;
-              final d    = doc.data() as Map<String, dynamic>;
-              final svc  = d['serviceName'] as String? ?? 'Service';
-              final amt  = _sd(d['baseAmount']);
-              final ts   = (d['completedAt'] as Timestamp?)?.toDate()?.toLocal();
-              final pay  = d['paymentMethod'] as String? ?? 'Cash';
+              final doc    = e.value;
+              final d      = doc.data() as Map<String, dynamic>;
+              final svc    = d['serviceName'] as String? ?? 'Service';
+              final amt    = _sd(d['baseAmount']);
+              final ts     = (d['completedAt'] as Timestamp?)?.toDate()?.toLocal();
+              final pay    = d['paymentMethod'] as String? ?? 'Cash';
               final isCash = pay == 'Cash';
               final isLast = e.key == docs.length - 1;
               final (icon, color) = _svcIcon(svc);
 
               return Column(children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   child: Row(children: [
                     Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                          color: color.withOpacity(0.12),
+                      width: 44, height: 44,
+                      decoration: BoxDecoration(color: color.withOpacity(0.12),
                           borderRadius: BorderRadius.circular(12)),
                       child: Icon(icon, color: color, size: 20),
                     ),
                     const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(svc,
-                                style: const TextStyle(
-                                    color: _t1,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 3),
-                            Row(children: [
-                              if (ts != null)
-                                Text(
-                                  DateFormat('d MMM, h:mm a').format(ts),
-                                  style: const TextStyle(
-                                      color: _t3, fontSize: 11),
-                                ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: (isCash ? _green : _purple)
-                                      .withOpacity(0.10),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  isCash ? 'Cash' : 'UPI',
-                                  style: TextStyle(
-                                      color: isCash ? _green : _purple,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                            ]),
-                          ]),
-                    ),
-                    Column(crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text('+₹${amt.toStringAsFixed(0)}',
-                              style: const TextStyle(
-                                  color: _green,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800)),
-                          const Text('COMPLETED',
+                    Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(svc, style: const TextStyle(color: _t1, fontSize: 13,
+                          fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 3),
+                      Row(children: [
+                        if (ts != null)
+                          Text(DateFormat('d MMM, h:mm a').format(ts),
+                              style: const TextStyle(color: _t3, fontSize: 11)),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: (isCash ? _green : _purple).withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(isCash ? 'Cash' : 'UPI',
                               style: TextStyle(
-                                  color: _t3,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600)),
-                        ]),
+                                  color: isCash ? _green : _purple,
+                                  fontSize: 9, fontWeight: FontWeight.w700)),
+                        ),
+                      ]),
+                    ])),
+                    Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                      Text('+₹${amt.toStringAsFixed(0)}',
+                          style: const TextStyle(color: _green, fontSize: 15,
+                              fontWeight: FontWeight.w800)),
+                      const Text('COMPLETED',
+                          style: TextStyle(color: _t3, fontSize: 9,
+                              fontWeight: FontWeight.w600)),
+                    ]),
                   ]),
                 ),
-                if (!isLast)
-                  Divider(
-                      height: 1,
-                      color: const Color(0xFFF1F0FF),
-                      indent: 16,
-                      endIndent: 16),
+                if (!isLast) Divider(height: 1,
+                    color: const Color(0xFFF1F0FF), indent: 16, endIndent: 16),
               ]);
             }).toList(),
           ),
@@ -924,23 +793,19 @@ class _TransactionList extends StatelessWidget {
 
   Widget _emptyState() => Container(
     padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 24),
-    decoration: BoxDecoration(
-        color: Colors.white,
+    decoration: BoxDecoration(color: Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _border)),
     child: Column(children: [
       Container(
-        width: 64,
-        height: 64,
+        width: 64, height: 64,
         decoration: BoxDecoration(
             color: _purple.withOpacity(0.10), shape: BoxShape.circle),
-        child: const Icon(Icons.receipt_long_rounded,
-            color: _purple, size: 28),
+        child: const Icon(Icons.receipt_long_rounded, color: _purple, size: 28),
       ),
       const SizedBox(height: 14),
       const Text('No transactions yet',
-          style: TextStyle(
-              color: _t1, fontSize: 15, fontWeight: FontWeight.w700)),
+          style: TextStyle(color: _t1, fontSize: 15, fontWeight: FontWeight.w700)),
       const SizedBox(height: 6),
       const Text('Completed bookings will appear here',
           style: TextStyle(color: _t2, fontSize: 12)),
@@ -948,17 +813,13 @@ class _TransactionList extends StatelessWidget {
   );
 
   Widget _shimmer() => Column(
-    children: List.generate(
-      3,
-          (_) => Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        height: 72,
-        decoration: BoxDecoration(
+    children: List.generate(3, (_) => Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      height: 72,
+      decoration: BoxDecoration(
           color: const Color(0xFFF1F0FF),
-          borderRadius: BorderRadius.circular(14),
-        ),
-      ),
-    ),
+          borderRadius: BorderRadius.circular(14)),
+    )),
   );
 }
 
@@ -969,15 +830,12 @@ class _SecHead extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-    Container(
-        width: 4,
-        height: 18,
-        decoration: BoxDecoration(
-            color: _purple, borderRadius: BorderRadius.circular(4))),
+    Container(width: 4, height: 18,
+        decoration: BoxDecoration(color: _purple,
+            borderRadius: BorderRadius.circular(4))),
     const SizedBox(width: 10),
-    Text(title,
-        style: const TextStyle(
-            color: _t1, fontSize: 17, fontWeight: FontWeight.w800)),
+    Text(title, style: const TextStyle(color: _t1, fontSize: 17,
+        fontWeight: FontWeight.w800)),
   ]);
 }
 
@@ -999,58 +857,43 @@ class _WithdrawSheet extends StatelessWidget {
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 14),
-          child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                  color: const Color(0xFFDEE2E6),
+          child: Container(width: 40, height: 4,
+              decoration: BoxDecoration(color: const Color(0xFFDEE2E6),
                   borderRadius: BorderRadius.circular(2))),
         ),
         const Text('Withdraw Earnings',
-            style: TextStyle(
-                color: _t1, fontSize: 20, fontWeight: FontWeight.w800)),
+            style: TextStyle(color: _t1, fontSize: 20, fontWeight: FontWeight.w800)),
         const SizedBox(height: 6),
-        Text(
-          'Available: ₹${NumberFormat('#,##,###.##').format(balance)}',
-          style: const TextStyle(color: _t2, fontSize: 13),
-        ),
+        Text('Available: ₹${NumberFormat('#,##,###.##').format(balance)}',
+            style: const TextStyle(color: _t2, fontSize: 13)),
         const SizedBox(height: 24),
         TextField(
           controller: ctrl,
           keyboardType: TextInputType.number,
-          style: const TextStyle(
-              color: _t1, fontSize: 22, fontWeight: FontWeight.w800),
+          style: const TextStyle(color: _t1, fontSize: 22, fontWeight: FontWeight.w800),
           decoration: InputDecoration(
             prefixText: '₹ ',
-            prefixStyle: const TextStyle(
-                color: _purple, fontSize: 22, fontWeight: FontWeight.w800),
+            prefixStyle: const TextStyle(color: _purple, fontSize: 22,
+                fontWeight: FontWeight.w800),
             hintText: '0',
             hintStyle: const TextStyle(color: _t3),
             filled: true,
             fillColor: const Color(0xFFF8F7FF),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: _border),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: _border),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: _purple, width: 2),
-            ),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: _border)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: _border)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: _purple, width: 2)),
           ),
         ),
         const SizedBox(height: 20),
         SizedBox(
-          width: double.infinity,
-          height: 54,
+          width: double.infinity, height: 54,
           child: ElevatedButton(
             onPressed: () => Navigator.pop(context),
             style: ElevatedButton.styleFrom(
-              backgroundColor: _purple,
-              foregroundColor: Colors.white,
+              backgroundColor: _purple, foregroundColor: Colors.white,
               elevation: 0,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16)),
