@@ -30,7 +30,7 @@ import '../../widgets/notification_bell.dart';
 //            done, in_progress — only these 5 values are valid:
 // pending → accepted → ongoing → completed → cancelled
 class _Status {
-  static const pending   = 'pending';
+  static const pending   = 'booked';    // ← user app writes 'booked', not 'pending'
   static const accepted  = 'accepted';
   static const ongoing   = 'ongoing';
   static const completed = 'completed';
@@ -167,10 +167,9 @@ class _HelperDashboardState extends State<HelperDashboard>
   }
 
   void _initBadge() {
-    // Badge counts only status == 'pending' — no helper assigned yet
     _badgeSub = FirebaseFirestore.instance
         .collection('bookings')
-        .where('status', isEqualTo: _Status.pending)
+        .where('status', whereIn: ['booked', 'pending'])
         .snapshots()
         .listen((s) {
       if (mounted) setState(() => _pendingCount = s.docs.length);
@@ -1040,10 +1039,10 @@ class _PendingListState extends State<_PendingList> {
     return StreamBuilder<QuerySnapshot>(
       // PageStorageKey preserves scroll position across tab switches
       key: const PageStorageKey('pending_list'),
+      // AFTER — match both 'booked' and legacy 'pending', sort in-memory
       stream: FirebaseFirestore.instance
           .collection('bookings')
-          .where('status', isEqualTo: _Status.pending)
-          .orderBy('createdAt', descending: true)
+          .where('status', whereIn: ['booked', 'pending'])
           .limit(15)
           .snapshots(),
       builder: (ctx, snap) {
@@ -1053,6 +1052,18 @@ class _PendingListState extends State<_PendingList> {
         }
 
         // First ever load with no cached data yet → spinner
+        // AFTER — sort in-memory since we removed .orderBy()
+        if (snap.hasData && snap.data!.docs.isNotEmpty) {
+          _cached = List<QueryDocumentSnapshot>.from(snap.data!.docs)
+            ..sort((a, b) {
+              final ta = ((a.data() as Map)['createdAt'] as Timestamp?)
+                  ?.millisecondsSinceEpoch ?? 0;
+              final tb = ((b.data() as Map)['createdAt'] as Timestamp?)
+                  ?.millisecondsSinceEpoch ?? 0;
+              return tb.compareTo(ta);
+            });
+        }
+
         if (_cached.isEmpty &&
             snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -2392,9 +2403,10 @@ class _WaitingBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
+      // AFTER
       stream: FirebaseFirestore.instance
           .collection('bookings')
-          .where('status', isEqualTo: _Status.pending)
+          .where('status', whereIn: ['booked', 'pending'])
           .snapshots(),
       builder: (ctx, snap) {
         final n = snap.data?.docs.length ?? 0;
@@ -3018,10 +3030,11 @@ class _DashboardTabsState extends State<_DashboardTabs>
     super.dispose();
   }
 
+  // AFTER
   void _initBadge() {
     _badgeSub = FirebaseFirestore.instance
         .collection('bookings')
-        .where('status', isEqualTo: _Status.pending)
+        .where('status', whereIn: ['booked', 'pending'])
         .snapshots()
         .listen((s) {
       if (mounted) setState(() => _pendingCount = s.docs.length);

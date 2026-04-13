@@ -34,11 +34,11 @@ class _HelperIncomingJobsScreenState extends State<HelperIncomingJobsScreen>
           _buildHeader(),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
+              // AFTER — sort in-memory, no composite index needed
               stream: FirebaseFirestore.instance
                   .collection('bookings')
                   .where('helperId', isEqualTo: _uid)
                   .where('status', isEqualTo: 'booked')
-                  .orderBy('createdAt', descending: true)
                   .snapshots(),
               builder: (context, directSnap) {
                 final directDocs = directSnap.data?.docs ?? [];
@@ -157,12 +157,28 @@ class _HelperIncomingJobsScreenState extends State<HelperIncomingJobsScreen>
         child: Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+            // AFTER — debug button added before Spacer
             child: Row(children: [
               const Text('Incoming Requests',
                   style: TextStyle(
                       color: Colors.white,
                       fontSize: 20,
                       fontWeight: FontWeight.w800)),
+              TextButton(
+                onPressed: () async {
+                  final uid = FirebaseAuth.instance.currentUser?.uid ?? 'NOT LOGGED IN';
+                  final snap = await FirebaseFirestore.instance
+                      .collection('bookings')
+                      .where('helperId', isEqualTo: uid)
+                      .get();
+                  debugPrint('Helper UID: $uid | Bookings with this UID: ${snap.docs.length}');
+                  // ignore: use_build_context_synchronously
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('UID: $uid | Found: ${snap.docs.length} bookings')),
+                  );
+                },
+                child: const Text('Debug', style: TextStyle(color: Colors.white, fontSize: 10)),
+              ),
               const Spacer(),
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
