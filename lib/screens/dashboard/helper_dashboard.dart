@@ -166,9 +166,13 @@ class _HelperDashboardState extends State<HelperDashboard>
     }).catchError((_) {});
   }
 
+  // AFTER — counts only THIS helper's bookings
   void _initBadge() {
+    final uid = context.read<AuthProvider>().helper?.uid ?? '';
+    if (uid.isEmpty) return;
     _badgeSub = FirebaseFirestore.instance
         .collection('bookings')
+        .where('helperId', isEqualTo: uid)
         .where('status', whereIn: ['booked', 'pending'])
         .snapshots()
         .listen((s) {
@@ -1040,8 +1044,10 @@ class _PendingListState extends State<_PendingList> {
       // PageStorageKey preserves scroll position across tab switches
       key: const PageStorageKey('pending_list'),
       // AFTER — match both 'booked' and legacy 'pending', sort in-memory
+      // AFTER — returns ONLY this helper's assigned bookings
       stream: FirebaseFirestore.instance
           .collection('bookings')
+          .where('helperId', isEqualTo: widget.uid)
           .where('status', whereIn: ['booked', 'pending'])
           .limit(15)
           .snapshots(),
@@ -1819,7 +1825,7 @@ class _HomeTab extends StatelessWidget {
             const SizedBox(height: 14),
             _TodayScheduleCard(uid: uid, isHindi: isHindi),
             const SizedBox(height: 14),
-            _WaitingBanner(isHindi: isHindi, onTap: onGoJobs),
+            _WaitingBanner(isHindi: isHindi, uid: uid, onTap: onGoJobs),
             const SizedBox(height: 22),
             _SecHead(title: isHindi ? 'हालिया गतिविधि' : 'Recent Activity'),
             const SizedBox(height: 12),
@@ -2395,17 +2401,19 @@ class _StatChip extends StatelessWidget {
 }
 
 // ── Waiting banner ─────────────────────────────────────────────────────────
+// AFTER
 class _WaitingBanner extends StatelessWidget {
   final bool isHindi;
+  final String uid;              // ← ADDED
   final VoidCallback? onTap;
-  const _WaitingBanner({required this.isHindi, this.onTap});
+  const _WaitingBanner({required this.isHindi, required this.uid, this.onTap}); // ← uid required
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
-      // AFTER
       stream: FirebaseFirestore.instance
           .collection('bookings')
+          .where('helperId', isEqualTo: uid)   // ← ADDED: filter to this helper only
           .where('status', whereIn: ['booked', 'pending'])
           .snapshots(),
       builder: (ctx, snap) {
@@ -3032,8 +3040,11 @@ class _DashboardTabsState extends State<_DashboardTabs>
 
   // AFTER
   void _initBadge() {
+    final uid = context.read<AuthProvider>().helper?.uid ?? '';
+    if (uid.isEmpty) return;
     _badgeSub = FirebaseFirestore.instance
         .collection('bookings')
+        .where('helperId', isEqualTo: uid)
         .where('status', whereIn: ['booked', 'pending'])
         .snapshots()
         .listen((s) {
