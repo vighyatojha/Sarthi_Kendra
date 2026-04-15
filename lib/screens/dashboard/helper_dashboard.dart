@@ -100,7 +100,8 @@ Widget _paymentBadge(String? method) {
 // ROOT SCAFFOLD
 // ═══════════════════════════════════════════════════════════════════════════
 class HelperDashboard extends StatefulWidget {
-  const HelperDashboard({super.key});
+  final bool bypassKycGate;
+  const HelperDashboard({super.key, this.bypassKycGate = false});
   @override
   State<HelperDashboard> createState() => _HelperDashboardState();
 }
@@ -192,12 +193,13 @@ class _HelperDashboardState extends State<HelperDashboard>
   Widget build(BuildContext context) {
     final helper = context.watch<AuthProvider>().helper;
 
-    if (helper != null) {
+    if (helper != null && !widget.bypassKycGate) {
       if (helper.isPending)   return _KycPending(helper: helper);
       if (helper.isSubmitted) return _KycUnderReview(helper: helper);
       if (helper.isRejected)  return _KycRejected(helper: helper);
       if (helper.isInactive)  return _KycInactive(helper: helper);
     }
+    // bypassKycGate == true → fall through to normal dashboard
 
     final lang = context.watch<LanguageProvider>();
 
@@ -1052,13 +1054,7 @@ class _PendingListState extends State<_PendingList> {
           .limit(15)
           .snapshots(),
       builder: (ctx, snap) {
-        // Update cache only when real data arrives
-        if (snap.hasData && snap.data!.docs.isNotEmpty) {
-          _cached = snap.data!.docs;
-        }
-
-        // First ever load with no cached data yet → spinner
-        // AFTER — sort in-memory since we removed .orderBy()
+        // Update cache with sort only when real data arrives
         if (snap.hasData && snap.data!.docs.isNotEmpty) {
           _cached = List<QueryDocumentSnapshot>.from(snap.data!.docs)
             ..sort((a, b) {
@@ -1172,6 +1168,21 @@ class _RequestCardState extends State<_RequestCard> {
     });
   }
 
+
+  @override
+  /// Cancel timer before navigating to detail screen to prevent
+  /// two timers running simultaneously (race condition fix).
+  void _openDetail(BuildContext context) {
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => IncomingBookingDetail(bookingId: widget.bookingId),
+      ),
+    );
+    // Do NOT restart timer on return — let Firestore status decide
+  }
 
   @override
   void dispose() {
@@ -1802,7 +1813,8 @@ class _ScheduleShortcutBtn extends StatelessWidget {
 class _HomeTab extends StatelessWidget {
   final Position? myPos;
   final VoidCallback? onGoJobs;
-  const _HomeTab({this.myPos, this.onGoJobs});
+  final int pendingCount;
+  const _HomeTab({this.myPos, this.onGoJobs, this.pendingCount = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -1821,11 +1833,11 @@ class _HomeTab extends StatelessWidget {
             const SizedBox(height: 14),
             _EarningsCard(uid: uid, isHindi: isHindi),
             const SizedBox(height: 14),
-            _StatsRow(uid: uid),
+            _StatsRow(helper: helper),
             const SizedBox(height: 14),
             _TodayScheduleCard(uid: uid, isHindi: isHindi),
             const SizedBox(height: 14),
-            _WaitingBanner(isHindi: isHindi, uid: uid, onTap: onGoJobs),
+            _WaitingBanner(isHindi: isHindi, pendingCount: pendingCount, onTap: onGoJobs),
             const SizedBox(height: 22),
             _SecHead(title: isHindi ? 'हालिया गतिविधि' : 'Recent Activity'),
             const SizedBox(height: 12),
@@ -2054,16 +2066,11 @@ class _GreetingHeaderState extends State<_GreetingHeader>
           const NotificationBell(isDark: false),
         ]),
         const SizedBox(height: 14),
-        // Location pill
+        // Location pill — use helper.area directly (no extra stream needed)
         if (helper != null)
-          StreamBuilder<DocumentSnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('helpers').doc(helper.uid).snapshots(),
-            builder: (ctx, snap) {
-              final d = snap.data?.data() as Map<String, dynamic>? ?? {};
-              final area = (d['area'] as String?)?.isNotEmpty == true
-                  ? d['area'] as String
-                  : helper.area;
+          Builder(
+            builder: (ctx) {
+              final area    = helper.area;
               final display = area.isNotEmpty ? area : 'Surat, Gujarat';
 
               return GestureDetector(
@@ -2328,37 +2335,28 @@ class _RingPainter extends CustomPainter {
 }
 
 // ── Stats row ─────────────────────────────────────────────────────────────
+// ── Stats row — uses HelperModel directly, no extra Firestore stream ──────────
 class _StatsRow extends StatelessWidget {
-  final String uid;
-  const _StatsRow({required this.uid});
+  final HelperModel? helper;
+  const _StatsRow({required this.helper});
 
   @override
   Widget build(BuildContext context) {
-    if (uid.isEmpty) return const SizedBox.shrink();
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('helpers').doc(uid).snapshots(),
-      builder: (ctx, snap) {
-        double rating = 0; int reviews = 0, done = 0;
-        if (snap.hasData && snap.data!.exists) {
-          final d = snap.data!.data() as Map<String, dynamic>? ?? {};
-          rating  = _safeDouble(d['rating']);
-          reviews = _safeInt(d['totalReviews']);
-          done    = _safeInt(d['completedJobs'] ?? d['totalJobs']);
-        }
-        return Row(children: [
-          Expanded(child: _StatChip(
-              icon: Icons.star_rounded, color: _P.amber, label: 'RATING',
-              value: rating == 0 ? '–' : rating.toStringAsFixed(1),
-              sub: reviews > 0 ? '$reviews reviews' : 'No reviews')),
-          const SizedBox(width: 12),
-          Expanded(child: _StatChip(
-              icon: Icons.check_circle_rounded, color: _P.green,
-              label: 'JOBS DONE', value: '$done',
-              sub: '$done completed')),
-        ]);
-      },
-    );
+    if (helper == null) return const SizedBox.shrink();
+    final rating = helper!.rating;
+    final done   = helper!.completedJobs;
+
+    return Row(children: [
+      Expanded(child: _StatChip(
+          icon: Icons.star_rounded, color: _P.amber, label: 'RATING',
+          value: rating == 0 ? '–' : rating.toStringAsFixed(1),
+          sub: 'All time')),
+      const SizedBox(width: 12),
+      Expanded(child: _StatChip(
+          icon: Icons.check_circle_rounded, color: _P.green,
+          label: 'JOBS DONE', value: '$done',
+          sub: '$done completed')),
+    ]);
   }
 }
 
@@ -2402,66 +2400,61 @@ class _StatChip extends StatelessWidget {
 
 // ── Waiting banner ─────────────────────────────────────────────────────────
 // AFTER
+// ── Waiting banner — uses pendingCount from parent, no inner stream ─────────
 class _WaitingBanner extends StatelessWidget {
   final bool isHindi;
-  final String uid;              // ← ADDED
+  final int pendingCount;
   final VoidCallback? onTap;
-  const _WaitingBanner({required this.isHindi, required this.uid, this.onTap}); // ← uid required
+  const _WaitingBanner({
+    required this.isHindi,
+    required this.pendingCount,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('bookings')
-          .where('helperId', isEqualTo: uid)   // ← ADDED: filter to this helper only
-          .where('status', whereIn: ['booked', 'pending'])
-          .snapshots(),
-      builder: (ctx, snap) {
-        final n = snap.data?.docs.length ?? 0;
-        if (n == 0) return const SizedBox.shrink();
-        return GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.all(14),
+    if (pendingCount == 0) return const SizedBox.shrink();
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: [
+            _P.purple.withOpacity(0.07),
+            _P.purple.withOpacity(0.02),
+          ]),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _P.purple.withOpacity(0.18)),
+        ),
+        child: Row(children: [
+          Container(
+            width: 44, height: 44,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [
-                _P.purple.withOpacity(0.07),
-                _P.purple.withOpacity(0.02),
-              ]),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _P.purple.withOpacity(0.18)),
-            ),
-            child: Row(children: [
-              Container(
-                width: 44, height: 44,
-                decoration: BoxDecoration(
-                    color: _P.purple.withOpacity(0.10),
-                    borderRadius: BorderRadius.circular(12)),
-                child: Stack(alignment: Alignment.center, children: [
-                  const Icon(Icons.notifications_active_rounded,
-                      color: _P.purple, size: 22),
-                  Positioned(top: 6, right: 6,
-                      child: Container(width: 8, height: 8,
-                          decoration: const BoxDecoration(
-                              color: _P.red, shape: BoxShape.circle))),
-                ]),
-              ),
-              const SizedBox(width: 12),
-              Expanded(child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(
-                    '$n ${isHindi ? 'नए अनुरोध' : 'New Request${n > 1 ? "s" : ""}'}',
-                    style: const TextStyle(
-                        color: _P.t1, fontSize: 14, fontWeight: FontWeight.w700)),
-                Text(isHindi ? 'जॉब्स टैब पर देखें' : 'Tap to view in Jobs tab',
-                    style: const TextStyle(color: _P.t2, fontSize: 11)),
-              ])),
-              const Icon(Icons.arrow_forward_ios_rounded,
-                  size: 13, color: _P.purple),
+                color: _P.purple.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(12)),
+            child: Stack(alignment: Alignment.center, children: [
+              const Icon(Icons.notifications_active_rounded,
+                  color: _P.purple, size: 22),
+              Positioned(top: 6, right: 6,
+                  child: Container(width: 8, height: 8,
+                      decoration: const BoxDecoration(
+                          color: _P.red, shape: BoxShape.circle))),
             ]),
           ),
-        );
-      },
+          const SizedBox(width: 12),
+          Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+                '$pendingCount ${isHindi ? 'नए अनुरोध' : 'New Request${pendingCount > 1 ? "s" : ""}'}',
+                style: const TextStyle(
+                    color: _P.t1, fontSize: 14, fontWeight: FontWeight.w700)),
+            Text(isHindi ? 'जॉब्स टैब पर देखें' : 'Tap to view in Jobs tab',
+                style: const TextStyle(color: _P.t2, fontSize: 11)),
+          ])),
+          const Icon(Icons.arrow_forward_ios_rounded,
+              size: 13, color: _P.purple),
+        ]),
+      ),
     );
   }
 }
@@ -2476,7 +2469,9 @@ class _ActivityList extends StatelessWidget {
       case _Status.completed: return (Icons.check_circle_rounded, _P.green);
       case _Status.accepted:  return (Icons.handshake_rounded, _P.purple);
       case _Status.ongoing:   return (Icons.play_circle_rounded, AppColors.onlineGreen);
-      case _Status.pending:   return (Icons.pending_rounded, _P.amber);
+      case 'booked':          // _Status.pending == 'booked'
+      case 'pending':         // legacy literal 'pending'
+        return (Icons.pending_rounded, _P.amber);
       default:                return (Icons.cancel_rounded, AppColors.danger);
     }
   }
@@ -2867,9 +2862,9 @@ class _KycUnderReviewState extends State<_KycUnderReview> {
           label: 'Go to Dashboard',
           icon: Icons.dashboard_rounded,
           onTap: (ctx) {
-            // Pop KYC screen and go to dashboard
             Navigator.of(ctx).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const _DashboardBypass()),
+              MaterialPageRoute(
+                  builder: (_) => const HelperDashboard(bypassKycGate: true)),
                   (_) => false,
             );
           },
@@ -2992,103 +2987,7 @@ class _KycShell extends StatelessWidget {
 }
 
 // Bypasses KYC gate — used when helper wants to explore dashboard while waiting
-class _DashboardBypass extends StatelessWidget {
-  const _DashboardBypass({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    // Directly render the tabbed dashboard without KYC checks
-    return const _DashboardTabs();
-  }
-}
-
-class _DashboardTabs extends StatefulWidget {
-  const _DashboardTabs({super.key});
-  @override
-  State<_DashboardTabs> createState() => _DashboardTabsState();
-}
-
-class _DashboardTabsState extends State<_DashboardTabs>
-    with SingleTickerProviderStateMixin {
-  int _tab = 0;
-  late final AnimationController _fadeCtrl;
-  late final Animation<double> _fadeAnim;
-  Position? _myPos;
-  int _pendingCount = 0;
-  StreamSubscription<QuerySnapshot>? _badgeSub;
-  StreamSubscription<Position>? _locSub;
-
-  @override
-  void initState() {
-    super.initState();
-    _fadeCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 200));
-    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-    _fadeCtrl.forward();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initBadge();
-    });
-  }
-
-  @override
-  void dispose() {
-    _fadeCtrl.dispose();
-    _badgeSub?.cancel();
-    _locSub?.cancel();
-    super.dispose();
-  }
-
-  // AFTER
-  void _initBadge() {
-    final uid = context.read<AuthProvider>().helper?.uid ?? '';
-    if (uid.isEmpty) return;
-    _badgeSub = FirebaseFirestore.instance
-        .collection('bookings')
-        .where('helperId', isEqualTo: uid)
-        .where('status', whereIn: ['booked', 'pending'])
-        .snapshots()
-        .listen((s) {
-      if (mounted) setState(() => _pendingCount = s.docs.length);
-    });
-  }
-
-  void _switchTab(int i) {
-    if (_tab == i) return;
-    HapticFeedback.selectionClick();
-    _fadeCtrl.reset();
-    setState(() => _tab = i);
-    _fadeCtrl.forward();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final helper = context.watch<AuthProvider>().helper;
-    final lang = context.watch<LanguageProvider>();
-
-    final pages = [
-      _JobsTab(myPos: _myPos, pendingCount: _pendingCount, onGoHome: () => _switchTab(1)),
-      _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0)),
-      const EarningsScreen(),
-      const TrustSafetyScreen(),
-      const HelperProfileScreen(),
-    ];
-
-    return Scaffold(
-      backgroundColor: _P.bg,
-      extendBody: true,
-      body: FadeTransition(
-        opacity: _fadeAnim,
-        child: IndexedStack(index: _tab, children: pages),
-      ),
-      bottomNavigationBar: _BottomNav(
-        selected: _tab,
-        onSelect: _switchTab,
-        lang: lang,
-        badge: _pendingCount,
-      ),
-    );
-  }
-}
 
 class _KycBtn extends StatelessWidget {
   final String label;

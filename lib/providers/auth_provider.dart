@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 import '../models/helper_model.dart';
 
@@ -32,6 +33,10 @@ class AuthProvider extends ChangeNotifier {
   StreamSubscription<User?>?            _authSub;
   StreamSubscription<DocumentSnapshot>? _helperSub;
   StreamSubscription<QuerySnapshot>?    _notifSub;
+  StreamSubscription<DatabaseEvent>?    _rtdbNotifSub;
+
+  int _firestoreUnread = 0;
+  int _rtdbUnread      = 0;
 
   HelperModel? get helper        => _helper;
   String?      get errorMessage  => _errorMessage;
@@ -86,6 +91,9 @@ class AuthProvider extends ChangeNotifier {
   // ── Notifications ─────────────────────────────────────────────
   void _subscribeNotifications(String uid) {
     _notifSub?.cancel();
+    _rtdbNotifSub?.cancel();
+
+    // Firestore notifications (Firestore path: notifications/{uid}/items)
     _notifSub = _db
         .collection('notifications')
         .doc(uid)
@@ -93,21 +101,62 @@ class AuthProvider extends ChangeNotifier {
         .where('read', isEqualTo: false)
         .snapshots()
         .listen(
-          (s) { _unreadCount = s.docs.length; notifyListeners(); },
+          (s) {
+        _firestoreUnread = s.docs.length;
+        _unreadCount     = _firestoreUnread + _rtdbUnread;
+        notifyListeners();
+      },
       onError: (e) => debugPrint('notifSub: $e'),
     );
+
+    // NEW: RTDB helper_notifications/{uid} — real-time delivery path for helpers
+    // Write here from booking_chat_service.dart or admin panel for push delivery.
+    _rtdbNotifSub = FirebaseDatabase.instance
+        .ref('helper_notifications/$uid')
+        .onValue
+        .listen((event) {
+      if (event.snapshot.value == null) {
+        _rtdbUnread = 0;
+      } else {
+        final raw = Map<String, dynamic>.from(event.snapshot.value as Map);
+        _rtdbUnread = raw.values.where((v) {
+          try {
+            final item = Map<String, dynamic>.from(v as Map);
+            return item['read'] != true;
+          } catch (_) { return false; }
+        }).length;
+      }
+      _unreadCount = _firestoreUnread + _rtdbUnread;
+      notifyListeners();
+    }, onError: (e) => debugPrint('rtdbNotifSub: $e'));
   }
 
   Future<void> markAllNotificationsRead() async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
     try {
+      // Mark Firestore notifications as read
       final snap = await _db
           .collection('notifications').doc(uid).collection('items')
           .where('read', isEqualTo: false).get();
       final batch = _db.batch();
       for (final d in snap.docs) batch.update(d.reference, {'read': true});
       await batch.commit();
+
+      // Mark RTDB helper_notifications as read
+      final rtdbSnap = await FirebaseDatabase.instance
+          .ref('helper_notifications/$uid')
+          .get();
+      if (rtdbSnap.exists && rtdbSnap.value != null) {
+        final data  = Map<String, dynamic>.from(rtdbSnap.value as Map);
+        final updates = <String, dynamic>{};
+        for (final key in data.keys) {
+          updates['helper_notifications/$uid/$key/read'] = true;
+        }
+        if (updates.isNotEmpty) {
+          await FirebaseDatabase.instance.ref().update(updates);
+        }
+      }
     } catch (_) {}
   }
 
@@ -238,8 +287,11 @@ class AuthProvider extends ChangeNotifier {
           'status':          'pending',
           'rating':          0.0,
           'totalJobs':       0,
+          'completedJobs':   0,    // ← ADD
           'kycDone':         false,
           'kycSkipped':      false,
+
+          // ← FIX: Added kycStatus field
           'kycStatus':       'not_submitted',
           'isOnline':        false,
           'photoUrl':        cred.user!.photoURL ?? '',
@@ -353,11 +405,9 @@ class AuthProvider extends ChangeNotifier {
         'status':          'pending',
         'rating':          0.0,
         'totalJobs':       0,
+        'completedJobs':   0,    // ← ADD
         'kycDone':         false,
         'kycSkipped':      false,
-
-        // ← FIX: Added kycStatus field — admin filters by kycStatus === 'pending'
-        //   Without this, no KYC submissions will ever appear in admin panel
         'kycStatus':       'not_submitted',
 
         'isOnline':        false,
@@ -507,8 +557,11 @@ class AuthProvider extends ChangeNotifier {
   }
 
   void _cancelStreams() {
-    _helperSub?.cancel(); _helperSub = null;
-    _notifSub?.cancel();  _notifSub  = null;
+    _helperSub?.cancel();      _helperSub      = null;
+    _notifSub?.cancel();       _notifSub       = null;
+    _rtdbNotifSub?.cancel();   _rtdbNotifSub   = null;
+    _firestoreUnread = 0;
+    _rtdbUnread      = 0;
   }
 
   // ── Error helpers ─────────────────────────────────────────────

@@ -226,6 +226,7 @@ class _AvgRatingCard extends StatelessWidget {
               : FirebaseFirestore.instance
               .collectionGroup('user_to_helper')
               .where('revieweeId', isEqualTo: uid)
+              .limit(50)
               .snapshots(),
           builder: (ctx2, reviewSnap) {
             final Map<int, int> breakdown = {
@@ -563,7 +564,7 @@ class _CustomerReviewsSection extends StatelessWidget {
           .collectionGroup('user_to_helper')
           .where('revieweeId', isEqualTo: uid)
           .orderBy('createdAt', descending: true)
-          .limit(20)
+          .limit(50)
           .snapshots(),
       builder: (ctx, snap) {
         final docs = snap.data?.docs ?? [];
@@ -1008,11 +1009,19 @@ class _RateUserSection extends StatelessWidget {
           .collection('bookings')
           .where('helperId', isEqualTo: uid)
           .where('status', isEqualTo: 'completed')
-          .orderBy('completedAt', descending: true)
           .limit(10)
           .snapshots(),
       builder: (ctx, snap) {
-        final unrated = (snap.data?.docs ?? []).where((doc) {
+        // Sort in-memory to avoid composite index requirement
+        final sorted = (snap.data?.docs ?? [])
+          ..sort((a, b) {
+            final ta = ((a.data() as Map)['completedAt'] as Timestamp?)
+                ?.millisecondsSinceEpoch ?? 0;
+            final tb = ((b.data() as Map)['completedAt'] as Timestamp?)
+                ?.millisecondsSinceEpoch ?? 0;
+            return tb.compareTo(ta);
+          });
+        final unrated = sorted.where((doc) {
           final d = doc.data() as Map<String, dynamic>;
           return d['helperRating'] == null;
         }).toList();

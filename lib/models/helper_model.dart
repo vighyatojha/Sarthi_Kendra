@@ -12,6 +12,7 @@ class HelperModel {
   final String       status;      // pending | submitted | approved | rejected | inactive
   final double       rating;
   final int          totalJobs;
+  final int          completedJobs;
   final bool         kycDone;
   final bool         kycSkipped;
   final bool         isOnline;
@@ -40,6 +41,7 @@ class HelperModel {
     required this.status,
     this.rating          = 0.0,
     this.totalJobs       = 0,
+    this.completedJobs   = 0,
     this.kycDone         = false,
     this.kycSkipped      = false,
     this.isOnline        = false,
@@ -97,6 +99,7 @@ class HelperModel {
     String?       status,
     double?       rating,
     int?          totalJobs,
+    int?          completedJobs,
     bool?         kycDone,
     bool?         kycSkipped,
     bool?         isOnline,
@@ -125,6 +128,7 @@ class HelperModel {
       status:            status          ?? this.status,
       rating:            rating          ?? this.rating,
       totalJobs:         totalJobs       ?? this.totalJobs,
+      completedJobs:     completedJobs   ?? this.completedJobs,
       kycDone:           kycDone         ?? this.kycDone,
       kycSkipped:        kycSkipped      ?? this.kycSkipped,
       isOnline:          isOnline        ?? this.isOnline,
@@ -157,6 +161,7 @@ class HelperModel {
       status:            (map['status']            as String?) ?? 'pending',
       rating:            ((map['rating']           ?? 0.0) as num).toDouble(),
       totalJobs:         ((map['totalJobs']        ?? 0)   as num).toInt(),
+      completedJobs:     ((map['completedJobs']    ?? map['totalJobs'] ?? 0) as num).toInt(),
       kycDone:           (map['kycDone']           as bool?) ?? false,
       kycSkipped:        (map['kycSkipped']        as bool?) ?? false,
       isOnline:          (map['isOnline']          as bool?) ?? false,
@@ -188,6 +193,7 @@ class HelperModel {
     'status':            status,
     'rating':            rating,
     'totalJobs':         totalJobs,
+    'completedJobs':     completedJobs,
     'kycDone':           kycDone,
     'kycSkipped':        kycSkipped,
     'isOnline':          isOnline,

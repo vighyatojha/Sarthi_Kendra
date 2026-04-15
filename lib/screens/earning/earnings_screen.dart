@@ -223,16 +223,38 @@ class _EarnCurveClipper extends CustomClipper<Path> {
 }
 
 // ── Balance card ──────────────────────────────────────────────────────────────
-class _BalanceCard extends StatelessWidget {
+// ── Balance card — single shared stream for all 3 mini-stats ─────────────────
+class _BalanceCard extends StatefulWidget {
   final String uid;
   const _BalanceCard({required this.uid});
+  @override
+  State<_BalanceCard> createState() => _BalanceCardState();
+}
+
+class _BalanceCardState extends State<_BalanceCard> {
+  late final Stream<QuerySnapshot> _sharedCompletedStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _sharedCompletedStream = widget.uid.isEmpty
+        ? const Stream.empty()
+        : FirebaseFirestore.instance
+        .collection('bookings')
+        .where('helperId', isEqualTo: widget.uid)
+        .where('status', isEqualTo: 'completed')
+        .snapshots();
+  }
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot>(
-      stream: uid.isEmpty
+      stream: widget.uid.isEmpty
           ? const Stream.empty()
-          : FirebaseFirestore.instance.collection('helpers').doc(uid).snapshots(),
+          : FirebaseFirestore.instance
+          .collection('helpers')
+          .doc(widget.uid)
+          .snapshots(),
       builder: (ctx, snap) {
         final d       = snap.data?.data() as Map<String, dynamic>? ?? {};
         final balance = _sd(d['totalBalance'] ?? d['walletBalance'] ?? 0);
@@ -259,6 +281,9 @@ class _BalanceCard extends StatelessWidget {
                 Text('₹ ${NumberFormat('#,##,###.##').format(balance)}',
                     style: const TextStyle(color: _t1, fontSize: 28,
                         fontWeight: FontWeight.w900)),
+                // NOTE: totalBalance is set by admin/backend only.
+                // It requires a Cloud Function or admin panel update
+                // when a withdrawal is processed. It stays 0.0 until then.
                 if (pending > 0) ...[
                   const SizedBox(height: 4),
                   Row(children: [
@@ -294,23 +319,108 @@ class _BalanceCard extends StatelessWidget {
             const SizedBox(height: 16),
             Container(height: 1, color: _border),
             const SizedBox(height: 16),
-            Row(children: [
-              _MiniStat(label: 'This Month', valueStream: uid.isEmpty
-                  ? const Stream.empty() : _completedStream(uid)),
-              _vDivider(),
-              _MiniStat(label: 'This Week', valueStream: uid.isEmpty
-                  ? const Stream.empty() : _completedStream(uid),
-                  isWeek: true),
-              _vDivider(),
-              _MiniStat(label: 'Total Jobs', valueStream: uid.isEmpty
-                  ? const Stream.empty() : _completedStream(uid),
-                  isCount: true),
-            ]),
+            // All 3 mini-stats share ONE StreamBuilder — no duplicate listeners
+            StreamBuilder<QuerySnapshot>(
+              stream: _sharedCompletedStream,
+              builder: (ctx2, completedSnap) {
+                return Row(children: [
+                  _MiniStat(
+                    label:    'This Month',
+                    snapshot: completedSnap,
+                    isWeek:   false,
+                    isCount:  false,
+                  ),
+                  _vDivider(),
+                  _MiniStat(
+                    label:    'This Week',
+                    snapshot: completedSnap,
+                    isWeek:   true,
+                    isCount:  false,
+                  ),
+                  _vDivider(),
+                  _MiniStat(
+                    label:    'Total Jobs',
+                    snapshot: completedSnap,
+                    isWeek:   false,
+                    isCount:  true,
+                  ),
+                ]);
+              },
+            ),
           ]),
         );
       },
     );
   }
+
+  Widget _vDivider() => Container(
+      width: 1, height: 36, color: _border,
+      margin: const EdgeInsets.symmetric(horizontal: 4));
+
+  void _showWithdrawSheet(BuildContext context, double balance) {
+    final ctrl = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _WithdrawSheet(balance: balance, ctrl: ctrl),
+    );
+  }
+}
+
+// ── Mini stat — accepts snapshot directly, no own stream ─────────────────────
+class _MiniStat extends StatelessWidget {
+  final String label;
+  final AsyncSnapshot<QuerySnapshot> snapshot;
+  final bool isCount;
+  final bool isWeek;
+
+  const _MiniStat({
+    required this.label,
+    required this.snapshot,
+    this.isCount = false,
+    this.isWeek  = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final now        = DateTime.now();
+    final monthStart = DateTime(now.year, now.month, 1);
+    final weekStart  = now.subtract(Duration(days: now.weekday - 1));
+    final weekDay0   = DateTime(weekStart.year, weekStart.month, weekStart.day);
+
+    double total = 0;
+    int    count = 0;
+
+    if (snapshot.hasData) {
+      for (final d in snapshot.data!.docs) {
+        final m  = d.data() as Map;
+        final ts = m['completedAt'] as Timestamp?;
+        final inRange = isWeek
+            ? _inRange(ts, weekDay0)
+            : isCount ? true : _inRange(ts, monthStart);
+        if (inRange) {
+          count++;
+          total += _sd(m['baseAmount']);
+        }
+      }
+    }
+
+    return Expanded(
+      child: Column(children: [
+        Text(
+          isCount
+              ? '$count'
+              : '₹${NumberFormat('#,###').format(total)}',
+          style: const TextStyle(color: _purple, fontSize: 15,
+              fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 3),
+        Text(label, style: const TextStyle(color: _t3, fontSize: 10)),
+      ]),
+    );
+  }
+}
 
   Widget _vDivider() => Container(
       width: 1, height: 36, color: _border,
@@ -333,59 +443,9 @@ class _BalanceCard extends StatelessWidget {
       builder: (_) => _WithdrawSheet(balance: balance, ctrl: ctrl),
     );
   }
-}
 
-class _MiniStat extends StatelessWidget {
-  final String label;
-  final Stream<QuerySnapshot> valueStream;
-  final bool isCount;
-  final bool isWeek;
-  const _MiniStat({required this.label, required this.valueStream,
-    this.isCount = false, this.isWeek = false});
 
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: StreamBuilder<QuerySnapshot>(
-        stream: valueStream,
-        builder: (ctx, snap) {
-          final now   = DateTime.now();
-          final monthStart = DateTime(now.year, now.month, 1);
-          final weekStart  = now.subtract(Duration(days: now.weekday - 1));
-          final weekDay0   = DateTime(weekStart.year, weekStart.month, weekStart.day);
 
-          double total = 0;
-          int count    = 0;
-          if (snap.hasData) {
-            for (final d in snap.data!.docs) {
-              final m  = d.data() as Map;
-              final ts = m['completedAt'] as Timestamp?;
-              // ✅ Filter dates in-memory
-              final inRange = isWeek
-                  ? _inRange(ts, weekDay0)
-                  : isCount ? true : _inRange(ts, monthStart);
-              if (inRange) {
-                count++;
-                total += _sd(m['baseAmount']);
-              }
-            }
-          }
-          return Column(children: [
-            Text(
-              isCount
-                  ? '$count'
-                  : '₹${NumberFormat('#,###').format(total)}',
-              style: const TextStyle(color: _purple, fontSize: 15,
-                  fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 3),
-            Text(label, style: const TextStyle(color: _t3, fontSize: 10)),
-          ]);
-        },
-      ),
-    );
-  }
-}
 
 // ── Period toggle ─────────────────────────────────────────────────────────────
 class _PeriodToggle extends StatelessWidget {
@@ -891,7 +951,28 @@ class _WithdrawSheet extends StatelessWidget {
         SizedBox(
           width: double.infinity, height: 54,
           child: ElevatedButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              final amount = double.tryParse(ctrl.text.trim()) ?? 0;
+              if (amount <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Enter a valid amount'),
+                  backgroundColor: _red,
+                  behavior: SnackBarBehavior.floating,
+                ));
+                return;
+              }
+              if (amount > balance) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(
+                      'Amount exceeds balance (₹${balance.toStringAsFixed(0)})'),
+                  backgroundColor: _red,
+                  behavior: SnackBarBehavior.floating,
+                ));
+                return;
+              }
+              Navigator.pop(context);
+              // TODO: Call withdrawal API
+            },
             style: ElevatedButton.styleFrom(
               backgroundColor: _purple, foregroundColor: Colors.white,
               elevation: 0,

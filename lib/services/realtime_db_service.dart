@@ -25,7 +25,7 @@ class RealtimeDbService {
   DocumentReference _chatDoc(String chatId) =>
       _fs.collection('chats').doc(chatId);
 
-  // ─── Stream all messages for a chat (used by user ChatScreen) ─────────────
+  // ─── Stream all messages for a chat ───────────────────────────────────────
 
   Stream<List<Map<String, dynamic>>> messagesStream(String chatId) {
     return _msgsRef(chatId).orderByChild('timestamp').onValue.map((event) {
@@ -44,7 +44,7 @@ class RealtimeDbService {
     });
   }
 
-  // ─── Send a message (user → helper) ───────────────────────────────────────
+  // ─── Send a regular chat message ──────────────────────────────────────────
 
   Future<void> sendMessage({
     required String chatId,
@@ -52,31 +52,48 @@ class RealtimeDbService {
     required String senderName,
     required String text,
     String role = 'user',
+    String? helperId,   // pass this so we can write a notification
+    String? serviceName,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     await _msgsRef(chatId).push().set({
-      'text': text,
-      'senderId': senderId,
+      'text':       text,
+      'senderId':   senderId,
       'senderName': senderName,
       'senderRole': role,
-      'timestamp': now,
-      'read': false,
+      'timestamp':  now,
+      'read':       false,
     });
 
     // Update Firestore metadata so helper's chat list refreshes
     await _chatDoc(chatId).update({
-      'lastMessage': text,
+      'lastMessage':     text,
       'lastMessageTime': FieldValue.serverTimestamp(),
-      'helperUnread': FieldValue.increment(1),
+      'helperUnread':    FieldValue.increment(1),
     }).catchError((_) {});
+
+    // Write a Firestore notification so it appears in NotificationsScreen
+    if (helperId != null && helperId.isNotEmpty) {
+      await _fs
+          .collection('notifications')
+          .doc(helperId)
+          .collection('items')
+          .add({
+        'type':      'new_message',
+        'title':     'New message from $senderName',
+        'body':      text.length > 80 ? '${text.substring(0, 80)}…' : text,
+        'chatId':    chatId,
+        'senderId':  senderId,
+        'senderName': senderName,
+        'serviceName': serviceName ?? '',
+        'read':      false,
+        'createdAt': FieldValue.serverTimestamp(),
+      }).catchError((_) {});
+    }
   }
 
-  // ─── Send automated booking-confirmed message (helper → user, system tone) ─
-  //
-  // Called by BookingChatService.onBookingAccepted() automatically.
-  // The message has type: 'booking_confirmed' so user-side ChatScreen renders
-  // it as a _SystemMessage (purple info card) instead of a regular bubble.
+  // ─── Send booking-confirmed system message ─────────────────────────────────
 
   Future<void> sendBookingConfirmedMessage({
     required String chatId,
@@ -85,7 +102,7 @@ class RealtimeDbService {
     required String userName,
     required String serviceName,
     required String scheduledTime,
-    String? userId, // if provided, increments that user's unread counter
+    String? userId,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
 
@@ -100,30 +117,67 @@ class RealtimeDbService {
       'senderId': helperId,
       'senderName': helperName,
       'senderRole': 'helper',
-      'type': 'booking_confirmed',   // renders as _SystemMessage on user side
+      'type': 'booking_confirmed',
       'timestamp': now,
       'read': false,
     });
 
-    // Update Firestore metadata — both list views refresh
     await _chatDoc(chatId).update({
       'lastMessage': 'Booking confirmed! I\'ll be there at $scheduledTime.',
       'lastMessageTime': FieldValue.serverTimestamp(),
       'userUnread': FieldValue.increment(1),
       if (userId != null)
-        'unreadCount_$userId': FieldValue.increment(1), // user-side badge
+        'unreadCount_$userId': FieldValue.increment(1),
       'bookingStatus': 'accepted',
     }).catchError((_) {});
   }
 
-  // ─── Notify helper inbox (lightweight RTDB trigger) ───────────────────────
+  // ─── NEW: Send system message when helper confirms job done ───────────────
   //
-  // Used by user-side ChatScreen after sending a message so the helper's
-  // device can surface a local notification via an RTDB listener / FCM trigger.
+  // Appears in both sides' chat as a purple info pill.
+  // Tells the user: "Helper confirmed the job is done — please confirm payment."
+
+  Future<void> sendHelperConfirmedMessage({
+    required String chatId,
+    required String helperName,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _msgsRef(chatId).push().set({
+      'text':       '✅ $helperName has confirmed the job is done. '
+          'Please tap "Confirm Payment" to complete the booking.',
+      'senderId':   'system',
+      'senderName': 'Sarthi Kendra',
+      'senderRole': 'system',
+      'type':       'system',
+      'timestamp':  now,
+      'read':       false,
+    });
+  }
+
+  // ─── NEW: Send system message when BOTH sides have confirmed ──────────────
+  //
+  // Appears as a celebration pill in both chats before the review sheet opens.
+
+  Future<void> sendMutualCompletionMessage({required String chatId}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _msgsRef(chatId).push().set({
+      'text':       '🎉 Both parties confirmed. '
+          'The job is now officially complete! '
+          'Please take a moment to rate each other.',
+      'senderId':   'system',
+      'senderName': 'Sarthi Kendra',
+      'senderRole': 'system',
+      'type':       'system',
+      'timestamp':  now,
+      'read':       false,
+    });
+  }
+
+  // ─── Notify helper inbox (lightweight RTDB trigger) ───────────────────────
 
   Future<void> notifyHelperMessage({
-    required String userId,          // helperId — the one to notify
-    required String helperName,      // sender display name (confusingly named in original, kept)
+    required String userId,
+    required String helperName,
     required String messagePreview,
     String? bookingId,
   }) async {
@@ -137,7 +191,6 @@ class RealtimeDbService {
 
   // ─── Reset unread counters ─────────────────────────────────────────────────
 
-  /// Call when the user opens a chat — resets their unread counter.
   Future<void> resetUserUnread(String chatId, String userId) async {
     await _chatDoc(chatId).update({
       'userUnread': 0,
@@ -145,7 +198,6 @@ class RealtimeDbService {
     }).catchError((_) {});
   }
 
-  /// Call when the helper opens a chat — resets helper's unread counter.
   Future<void> resetHelperUnread(String chatId) async {
     await _chatDoc(chatId)
         .update({'helperUnread': 0}).catchError((_) {});
@@ -160,8 +212,6 @@ class RealtimeDbService {
     }
     await _db.ref().update(updates).catchError((_) {});
   }
-
-  // ─── Delete all messages from RTDB (local clear) ─────────────────────────
 
   // ─── Delete all messages from RTDB (local clear) ─────────────────────────
 

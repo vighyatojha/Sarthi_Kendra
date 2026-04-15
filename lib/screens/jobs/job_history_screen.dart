@@ -318,6 +318,11 @@ class _FilteredListState extends State<_FilteredList>
                   ts != null && ts.isAfter(now);
             }).toList();
           case _Filter.all:
+          // Exclude pending/booked — these are not history items yet
+            docs = docs.where((doc) {
+              final s = (doc.data() as Map)['status'] as String? ?? '';
+              return s != 'booked' && s != 'pending';
+            }).toList();
             break;
         }
 
@@ -407,8 +412,12 @@ class _SummaryBar extends StatelessWidget {
         earned += (d['baseAmount'] as num?)?.toDouble() ?? 0.0;
       }
     }
+    final historyTotal = docs.where((d) {
+      final s = (d.data() as Map)['status'] as String? ?? '';
+      return s != 'booked' && s != 'pending';
+    }).length;
     return Row(children: [
-      Expanded(child: _Chip('Total Jobs', '${docs.length}', _kTeal3)),
+      Expanded(child: _Chip('Total Jobs', '$historyTotal', _kTeal3)),
       const SizedBox(width: 8),
       Expanded(child: _Chip('Completed',  '$completed',    _kGreen)),
       const SizedBox(width: 8),
@@ -453,6 +462,7 @@ class _JobCard extends StatelessWidget {
       case 'completed': return (_kGreen,  Icons.check_circle_rounded,    'DONE');
       case 'ongoing':   return (_kTeal3,  Icons.play_circle_rounded,     'IN PROGRESS');
       case 'accepted':  return (_kPurple, Icons.event_available_rounded, 'UPCOMING');
+      case 'booked':    return (_kAmber,  Icons.pending_rounded,         'PENDING');
       case 'pending':   return (_kAmber,  Icons.pending_rounded,         'PENDING');
       case 'cancelled': return (_kRed,    Icons.cancel_rounded,          'CANCELLED');
       default:          return (_kAmber,  Icons.help_outline_rounded,     s.toUpperCase());

@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/realtime_db_service.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 class BookingChatService {
   BookingChatService._();
@@ -10,20 +11,6 @@ class BookingChatService {
   // ─── Main entry point ─────────────────────────────────────────────────────
 
   /// Returns the chatId. Call this as soon as a helper accepts a booking.
-  ///
-  /// Example (in your helper bookings screen):
-  /// ```dart
-  /// final chatId = await BookingChatService.instance.onBookingAccepted(
-  ///   bookingId:     booking.id,
-  ///   helperId:      _uid,
-  ///   helperName:    _myName,
-  ///   helperPhoto:   _myPhoto,
-  ///   userId:        booking.userId,
-  ///   userName:      booking.userName,
-  ///   serviceName:   booking.serviceName,
-  ///   scheduledTime: booking.scheduledTime, // e.g. "10:00 AM, 30 Mar"
-  /// );
-  /// ```
   Future<String> onBookingAccepted({
     required String bookingId,
     required String helperId,
@@ -34,13 +21,8 @@ class BookingChatService {
     required String serviceName,
     required String scheduledTime,
   }) async {
-    // chatId = bookingId (deterministic — both apps derive it the same way,
-    // no lookup needed, no random Firestore ID mismatch possible)
     final chatId = bookingId;
 
-    // ── Step 1: set (merge) the Firestore chat document ────────────────────
-    // merge:true → re-acceptances never wipe existing RTDB message history.
-    // All fields written in one call so both apps always see a complete doc.
     await _fs.collection('chats').doc(chatId).set(
       {
         'chatId':              chatId,
@@ -60,19 +42,20 @@ class BookingChatService {
         'userUnread':          1,
         'unreadCount_$userId': 1,
         'bookingStatus':       'accepted',
+        // Mutual confirmation flags — both start false
+        'helperConfirmedComplete': false,
+        'userConfirmedComplete':   false,
         'createdAt':           FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),
     );
 
-    // ── Step 2: stamp chatId onto the booking doc ───────────────────────────
     await _fs.collection('bookings').doc(bookingId).update({
       'chatId':     chatId,
       'status':     'accepted',
       'acceptedAt': FieldValue.serverTimestamp(),
     }).catchError((_) {});
 
-    // ── Step 3: send auto-confirmation RTDB message ─────────────────────────
     await RealtimeDbService.instance.sendBookingConfirmedMessage(
       chatId:        chatId,
       helperId:      helperId,
@@ -83,7 +66,6 @@ class BookingChatService {
       userId:        userId,
     );
 
-    // ── Step 3b: send chat lifecycle warning ────────────────────────────────
     await RealtimeDbService.instance.sendSystemWarning(
       chatId:  chatId,
       message: '⚠️ Important: This chat will be automatically deleted once '
@@ -91,7 +73,6 @@ class BookingChatService {
           'Please take a screenshot before review if you need a record.',
     );
 
-    // ── Step 4: Firestore notification so badge updates immediately ─────────
     await _sendBookingConfirmedNotification(
       userId:        userId,
       helperId:      helperId,
@@ -105,7 +86,93 @@ class BookingChatService {
     return chatId;
   }
 
-  // ─── Call when booking is marked complete by helper ────────────────────────
+  // ─── Step A: Helper taps "Seva Done" ──────────────────────────────────────
+  //
+  // Sets helperConfirmedComplete = true on Firestore.
+  // Sends a system RTDB message prompting the user to confirm payment.
+  // Does NOT mark the booking completed yet — user must also confirm.
+
+  Future<void> onHelperConfirmedComplete({
+    required String bookingId,
+    required String chatId,
+    required String helperName,
+    required String userId,
+  }) async {
+    // Write the helper flag
+    await _fs.collection('chats').doc(chatId).update({
+      'helperConfirmedComplete': true,
+    }).catchError((_) {});
+
+    // Send a purple system pill into the RTDB chat
+    await RealtimeDbService.instance.sendHelperConfirmedMessage(
+      chatId:     chatId,
+      helperName: helperName,
+    );
+
+    // Notify the user so they know action is needed
+    await _fs
+        .collection('notifications')
+        .doc(userId)
+        .collection('items')
+        .add({
+      'type':      'helper_confirmed_complete',
+      'title':     'Helper says the job is done! ✅',
+      'body':      'Please confirm payment to complete the booking.',
+      'bookingId': bookingId,
+      'chatId':    chatId,
+      'read':      false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // ─── Step B: BOTH sides confirmed → finalise the booking ──────────────────
+  //
+  // Called by whichever side detects that both flags are true via the
+  // Firestore stream (the stream fires on both devices simultaneously, so
+  // both sides call this; the Firestore update is idempotent/merge-safe).
+
+  Future<void> onMutualCompletionConfirmed({
+    required String bookingId,
+    required String chatId,
+    required String userId,
+    required String serviceName,
+  }) async {
+    // Mark booking complete in Firestore
+    await _fs.collection('chats').doc(chatId).update({
+      'bookingStatus': 'completed',
+    }).catchError((_) {});
+
+    await _fs.collection('bookings').doc(bookingId).update({
+      'status':      'completed',
+      'completedAt': FieldValue.serverTimestamp(),
+    }).catchError((_) {});
+
+    // Drop a celebration message into the RTDB chat
+    await RealtimeDbService.instance.sendMutualCompletionMessage(
+      chatId: chatId,
+    );
+
+    // Notify user to leave a review
+    await _fs
+        .collection('notifications')
+        .doc(userId)
+        .collection('items')
+        .add({
+      'type':      'service_completed',
+      'title':     'Service Completed 🎉',
+      'body':      'How was your "$serviceName" experience? Tap to rate!',
+      'bookingId': bookingId,
+      'chatId':    chatId,
+      'rating':    0,
+      'read':      false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // ─── Legacy: called when helper marks complete unilaterally ───────────────
+  //
+  // Kept for backward compatibility. New flow goes through
+  // onHelperConfirmedComplete() + onMutualCompletionConfirmed() instead.
 
   Future<void> onBookingCompleted({
     required String bookingId,
@@ -122,7 +189,6 @@ class BookingChatService {
       'completedAt': FieldValue.serverTimestamp(),
     }).catchError((_) {});
 
-    // Notify user to rate the service
     await _fs
         .collection('notifications')
         .doc(userId)
@@ -165,5 +231,20 @@ class BookingChatService {
       'read':      false,
       'createdAt': FieldValue.serverTimestamp(),
     });
+
+    if (helperId.isNotEmpty) {
+      await FirebaseDatabase.instance
+          .ref('helper_notifications/$helperId')
+          .push()
+          .set({
+        'type':      'booking_accepted',
+        'title':     'Booking Accepted ✅',
+        'body':      'You confirmed the "$serviceName" booking. Customer notified.',
+        'bookingId': bookingId,
+        'chatId':    chatId,
+        'read':      false,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
   }
 }

@@ -50,20 +50,9 @@ class _IncomingBookingDetailState extends State<IncomingBookingDetail>
   /// FIX 5 — Only start the auto-decline countdown when scheduledAt is
   /// within 2 hours of now (instant booking).
   /// Future-scheduled bookings (e.g. booked for next week) get NO timer.
+  /// FIX: Check booking status FIRST before starting timer.
+  /// Prevents two timers running simultaneously (race condition).
   Future<void> _initTimerIfInstant() async {
-    // Start optimistically — cancel below if this is a future booking
-    if (mounted) {
-      setState(() => _timerActive = true);
-      _timerCtrl.forward();
-      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (!mounted) return;
-        setState(() => _secondsLeft--);
-        if (_secondsLeft <= 0) {
-          _timer?.cancel();
-          _autoDecline();
-        }
-      });
-    }
     try {
       final doc = await FirebaseFirestore.instance
           .collection('bookings')
@@ -71,21 +60,33 @@ class _IncomingBookingDetailState extends State<IncomingBookingDetail>
           .get();
       if (!mounted) return;
 
-      final data        = doc.data() ?? {};
-      final scheduledAt = (data['scheduledAt'] as Timestamp?)?.toDate();
+      final data   = doc.data() ?? {};
+      final status = (data['status'] as String?) ?? '';
 
-      final isInstant = scheduledAt == null ||
+      // If already accepted or cancelled, no timer needed
+      if (status == 'accepted' || status == 'cancelled') return;
+
+      final scheduledAt = (data['scheduledAt'] as Timestamp?)?.toDate();
+      final isInstant   = scheduledAt == null ||
           scheduledAt.difference(DateTime.now()).inMinutes <= 120;
 
-      if (!isInstant) {
-        // Future booking — cancel the optimistic timer
-        _timer?.cancel();
-        _timerCtrl.stop();
-        if (mounted) setState(() { _timerActive = false; _secondsLeft = 60; });
-        return;
+      // Only start timer for genuine instant pending bookings
+      if (!isInstant) return;
+
+      if (mounted) {
+        setState(() => _timerActive = true);
+        _timerCtrl.forward();
+        _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (!mounted) return;
+          setState(() => _secondsLeft--);
+          if (_secondsLeft <= 0) {
+            _timer?.cancel();
+            _autoDecline();
+          }
+        });
       }
     } catch (_) {
-      // If fetch fails, keep the running timer as a safety net
+      // If fetch fails, no timer started — helper can still manually decide
     }
   }
 

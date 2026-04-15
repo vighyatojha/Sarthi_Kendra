@@ -53,9 +53,12 @@ class _HelperIncomingJobsScreenState extends State<HelperIncomingJobsScreen>
                   builder: (context, openSnap) {
                     final openDocs = openSnap.data?.docs ?? [];
 
-                    if (directSnap.connectionState ==
+                    if ((directSnap.connectionState ==
                         ConnectionState.waiting &&
-                        !directSnap.hasData) {
+                        !directSnap.hasData) ||
+                        (openSnap.connectionState ==
+                            ConnectionState.waiting &&
+                            !openSnap.hasData)) {
                       return const Center(
                           child: CircularProgressIndicator(
                               color: Color(0xFF7C3AED)));
@@ -164,21 +167,7 @@ class _HelperIncomingJobsScreenState extends State<HelperIncomingJobsScreen>
                       color: Colors.white,
                       fontSize: 20,
                       fontWeight: FontWeight.w800)),
-              TextButton(
-                onPressed: () async {
-                  final uid = FirebaseAuth.instance.currentUser?.uid ?? 'NOT LOGGED IN';
-                  final snap = await FirebaseFirestore.instance
-                      .collection('bookings')
-                      .where('helperId', isEqualTo: uid)
-                      .get();
-                  debugPrint('Helper UID: $uid | Bookings with this UID: ${snap.docs.length}');
-                  // ignore: use_build_context_synchronously
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('UID: $uid | Found: ${snap.docs.length} bookings')),
-                  );
-                },
-                child: const Text('Debug', style: TextStyle(color: Colors.white, fontSize: 10)),
-              ),
+
               const Spacer(),
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
