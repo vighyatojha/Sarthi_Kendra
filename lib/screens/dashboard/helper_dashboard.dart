@@ -30,8 +30,9 @@ import '../../widgets/notification_bell.dart';
 //            done, in_progress — only these 5 values are valid:
 // pending → accepted → ongoing → completed → cancelled
 class _Status {
-  static const pending   = 'booked';    // ← user app writes 'booked', not 'pending'
+  static const pending   = 'booked';   // user app writes 'booked'
   static const accepted  = 'accepted';
+  static const arrived   = 'arrived';  // ← NEW: helper at location, not yet started
   static const ongoing   = 'ongoing';
   static const completed = 'completed';
   static const cancelled = 'cancelled';
@@ -205,7 +206,7 @@ class _HelperDashboardState extends State<HelperDashboard>
 
     final pages = [
       _JobsTab(myPos: _myPos, pendingCount: _pendingCount, onGoHome: () => _switchTab(1)),
-      _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0)),
+      _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0), pendingCount: _pendingCount),
       const EarningsScreen(),
       const TrustSafetyScreen(),
       const HelperProfileScreen(),
@@ -542,43 +543,61 @@ class _OngoingJobSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (uid.isEmpty) return const SizedBox.shrink();
-    // REQUIRES COMPOSITE INDEX: helperId ASC + status (whereIn) — create via
-    // Firebase console or click the URL in debug output if index is missing.
+    // ✅ Stream now includes 'arrived' status
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('bookings')
           .where('helperId', isEqualTo: uid)
-          .where('status', whereIn: [_Status.accepted, _Status.ongoing])
+          .where('status', whereIn: [
+        _Status.accepted,
+        _Status.arrived,
+        _Status.ongoing,
+      ])
           .limit(1)
           .snapshots(),
       builder: (ctx, snap) {
-        if (!snap.hasData || snap.data!.docs.isEmpty) return const SizedBox.shrink();
-        final doc = snap.data!.docs.first;
-        final d   = doc.data() as Map<String, dynamic>;
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final doc    = snap.data!.docs.first;
+        final d      = doc.data() as Map<String, dynamic>;
         final status = d['status'] as String? ?? _Status.accepted;
+
+        // Chip config per status
+        final (chipLabel, chipColor) = switch (status) {
+          _Status.ongoing  => ('IN PROGRESS', AppColors.onlineGreen),
+          _Status.arrived  => ('ARRIVED', _P.amber),
+          _              => ('ACCEPTED', _P.purple),
+        };
+
+        final sectionTitle = switch (status) {
+          _Status.ongoing => 'ONGOING JOB',
+          _Status.arrived => 'JOB IN PROGRESS',
+          _             => 'UPCOMING TODAY',
+        };
 
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Text(
-              status == _Status.ongoing
-                  ? 'ONGOING JOB'
-                  : 'UPCOMING TODAY',
+              sectionTitle,
               style: const TextStyle(
-                  color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800),
+                  color: _P.t1, fontSize: 20,
+                  fontWeight: FontWeight.w800),
             ),
             const SizedBox(width: 10),
             _Chip(
-              label: status == _Status.ongoing ? 'IN PROGRESS' : 'ACCEPTED',
-              bg: (status == _Status.ongoing
-                  ? AppColors.onlineGreen
-                  : _P.purple).withOpacity(0.12),
-              fg: status == _Status.ongoing
-                  ? AppColors.onlineGreen
-                  : _P.purple,
+              label: chipLabel,
+              bg: chipColor.withOpacity(0.12),
+              fg: chipColor,
             ),
           ]),
           const SizedBox(height: 12),
-          _OngoingCard(bookingId: doc.id, data: d, uid: uid, isHindi: isHindi),
+          _OngoingCard(
+            bookingId: doc.id,
+            data: d,
+            uid: uid,
+            isHindi: isHindi,
+          ),
           const SizedBox(height: 26),
         ]);
       },
@@ -604,8 +623,12 @@ class _OngoingCardState extends State<_OngoingCard> {
   Duration _elapsed = Duration.zero;
   bool _actionBusy = false;
 
-  String get _status => widget.data['status'] as String? ?? _Status.accepted;
-  bool get _isOngoing => _status == _Status.ongoing;
+  String get _status =>
+      widget.data['status'] as String? ?? _Status.accepted;
+
+  bool get _isAccepted => _status == _Status.accepted;
+  bool get _isArrived  => _status == _Status.arrived;
+  bool get _isOngoing  => _status == _Status.ongoing;
 
   @override
   void initState() {
@@ -616,14 +639,16 @@ class _OngoingCardState extends State<_OngoingCard> {
   @override
   void didUpdateWidget(_OngoingCard old) {
     super.didUpdateWidget(old);
-    // If status transitioned to ongoing, start the timer
     final wasOngoing = old.data['status'] == _Status.ongoing;
     if (_isOngoing && !wasOngoing) _startTimer();
-    if (!_isOngoing && wasOngoing) { _timer?.cancel(); _timer = null; }
+    if (!_isOngoing && wasOngoing) {
+      _timer?.cancel();
+      _timer = null;
+    }
   }
 
   void _startTimer() {
-    // Timer elapsed from startedAt; fall back to now if missing
+    if (!_isOngoing) return;
     final start =
         (widget.data['startedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
     _elapsed = DateTime.now().difference(start);
@@ -646,47 +671,56 @@ class _OngoingCardState extends State<_OngoingCard> {
     return '$h:$m:$s';
   }
 
-  Future<void> _reply(String msg) async {
-    HapticFeedback.lightImpact();
-    final db    = FirebaseFirestore.instance;
-    final batch = db.batch();
-    final ref   = db.collection('chats').doc(widget.bookingId)
-        .collection('messages').doc();
-    batch.set(ref, {
-      'text': msg, 'senderId': widget.uid,
-      'senderType': 'helper', 'isQuickReply': true,
+  // ── Notify user helper ────────────────────────────────────────────────────
+  Future<void> _notifyUser(
+      String type, String title, String body) async {
+    final userId = widget.data['userId'] as String? ?? '';
+    if (userId.isEmpty) return;
+    await FirebaseFirestore.instance
+        .collection('notifications')
+        .doc(userId)
+        .collection('items')
+        .add({
+      'type':      type,
+      'title':     title,
+      'body':      body,
+      'bookingId': widget.bookingId,
+      'read':      false,
       'createdAt': FieldValue.serverTimestamp(),
     });
-    batch.set(db.collection('chats').doc(widget.bookingId), {
-      'lastMessage': msg, 'lastMessageAt': FieldValue.serverTimestamp(),
-      'lastSenderId': widget.uid,
-    }, SetOptions(merge: true));
-    await batch.commit();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('"$msg" sent'),
-      backgroundColor: _P.green,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      duration: const Duration(seconds: 2),
-    ));
   }
 
-  // FIX 10: "Start Job" — only when status == 'accepted'
-  // Writes status: 'ongoing' and startedAt: serverTimestamp()
-  Future<void> _startJob() async {
+  // ── Step 1: Mark Arrived ──────────────────────────────────────────────────
+  Future<void> _markArrived() async {
     setState(() => _actionBusy = true);
     try {
       await FirebaseFirestore.instance
-          .collection('bookings').doc(widget.bookingId).update({
-        'status':    _Status.ongoing,
-        'startedAt': FieldValue.serverTimestamp(),
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .update({
+        'status':                   _Status.arrived,
+        'arrivedAt':                FieldValue.serverTimestamp(),
+        'statusTimestamps.arrived': FieldValue.serverTimestamp(), // ← syncs user timeline
       });
+      final helperName =
+          widget.data['helperName'] as String? ?? 'Your helper';
+      await _notifyUser(
+        'helper_arrived',
+        'Helper has Arrived! 📍',
+        '$helperName has arrived at your location.',
+      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('🚀 Job started!'),
-          backgroundColor: _P.purple,
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Row(children: [
+            Icon(Icons.location_on_rounded, color: Colors.white, size: 16),
+            SizedBox(width: 8),
+            Text('Arrival confirmed — customer notified!'),
+          ]),
+          backgroundColor: _P.amber,
           behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10)),
+          duration: const Duration(seconds: 2),
         ));
       }
     } finally {
@@ -694,7 +728,43 @@ class _OngoingCardState extends State<_OngoingCard> {
     }
   }
 
-  // FIX 10: "Mark Complete" — writes status: 'completed' + increments completedJobs
+  // ── Step 2: Start Job ─────────────────────────────────────────────────────
+  Future<void> _startJob() async {
+    setState(() => _actionBusy = true);
+    try {
+      final db    = FirebaseFirestore.instance;
+      await db.collection('bookings').doc(widget.bookingId).update({
+        'status':                        _Status.ongoing,
+        'startedAt':                     FieldValue.serverTimestamp(),
+        'statusTimestamps.inProgress':   FieldValue.serverTimestamp(), // ← syncs user timeline
+      });
+      final svcName =
+          widget.data['serviceName'] as String? ?? 'service';
+      await _notifyUser(
+        'job_started',
+        'Work has Started! 🔧',
+        'Your $svcName has officially started.',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Row(children: [
+            Icon(Icons.play_circle_rounded, color: Colors.white, size: 16),
+            SizedBox(width: 8),
+            Text('Job started — timer running!'),
+          ]),
+          backgroundColor: _P.purple,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10)),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  // ── Step 3: Mark Complete ─────────────────────────────────────────────────
   Future<void> _complete() async {
     setState(() => _actionBusy = true);
     try {
@@ -708,16 +778,57 @@ class _OngoingCardState extends State<_OngoingCard> {
         'completedJobs': FieldValue.increment(1),
       });
       await batch.commit();
+      final svcName =
+          widget.data['serviceName'] as String? ?? 'service';
+      await _notifyUser(
+        'job_completed',
+        'Job Completed! 🎉',
+        'Your $svcName has been completed. Please confirm and rate.',
+      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('🎉 Job marked complete!'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Row(children: [
+            Icon(Icons.check_circle_rounded, color: Colors.white, size: 16),
+            SizedBox(width: 8),
+            Text('Job marked complete!'),
+          ]),
           backgroundColor: _P.green,
           behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10)),
+          duration: const Duration(seconds: 2),
         ));
       }
     } finally {
       if (mounted) setState(() => _actionBusy = false);
     }
+  }
+
+  Future<void> _reply(String msg) async {
+    HapticFeedback.lightImpact();
+    final db    = FirebaseFirestore.instance;
+    final batch = db.batch();
+    final ref   = db.collection('chats').doc(widget.bookingId)
+        .collection('messages').doc();
+    batch.set(ref, {
+      'text': msg, 'senderId': widget.uid,
+      'senderType': 'helper', 'isQuickReply': true,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    batch.set(db.collection('chats').doc(widget.bookingId), {
+      'lastMessage': msg,
+      'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastSenderId': widget.uid,
+    }, SetOptions(merge: true));
+    await batch.commit();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('"$msg" sent'),
+      backgroundColor: _P.green,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      duration: const Duration(seconds: 2),
+    ));
   }
 
   Future<void> _openMaps() async {
@@ -739,184 +850,424 @@ class _OngoingCardState extends State<_OngoingCard> {
     }
   }
 
+  // ── Action button factory ─────────────────────────────────────────────────
+  Widget _buildActionButton() {
+    if (_isOngoing) {
+      return SizedBox(
+        width: double.infinity, height: 56,
+        child: ElevatedButton.icon(
+          onPressed: _actionBusy ? null : _complete,
+          icon: _actionBusy
+              ? const SizedBox(width: 18, height: 18,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.check_circle_rounded, size: 22),
+          label: Text(
+            widget.isHindi ? 'काम पूरा करें' : 'Mark Complete',
+            style: const TextStyle(
+                fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF166534),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+          ),
+        ),
+      );
+    }
+    if (_isArrived) {
+      return SizedBox(
+        width: double.infinity, height: 56,
+        child: ElevatedButton.icon(
+          onPressed: _actionBusy ? null : _startJob,
+          icon: _actionBusy
+              ? const SizedBox(width: 18, height: 18,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.play_circle_filled_rounded, size: 22),
+          label: Text(
+            widget.isHindi ? 'काम शुरू करें' : 'Start Work',
+            style: const TextStyle(
+                fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _P.purple,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+          ),
+        ),
+      );
+    }
+    // accepted
+    return SizedBox(
+      width: double.infinity, height: 56,
+      child: ElevatedButton.icon(
+        onPressed: _actionBusy ? null : _markArrived,
+        icon: _actionBusy
+            ? const SizedBox(width: 18, height: 18,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Colors.white))
+            : const Icon(Icons.location_on_rounded, size: 22),
+        label: Text(
+          widget.isHindi ? 'मैं पहुँच गया' : "I've Arrived",
+          style: const TextStyle(
+              fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFFF59E0B),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final d       = widget.data;
-    final address = d['address'] as String? ?? d['userAddress'] as String? ?? '';
-    // FIX: helper only sees baseAmount — platformFee is never shown
+    final address = d['address'] as String?
+        ?? d['userAddress'] as String? ?? '';
     final amount  = _helperAmount(d);
+    final svc     = d['serviceName'] as String? ?? 'Service';
     final replies = widget.isHindi
         ? ['मैं रास्ते पर हूँ', 'पहुँच गया', 'काम शुरू हुआ', '5 मिनट में आता हूँ']
         : ["I'm on my way", 'Arrived at location', 'Job started', '5 mins away'];
-
-    // Extract scheduledAt for display
-    final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate().toLocal();
+    final scheduledAt =
+    (d['scheduledAt'] as Timestamp?)?.toDate().toLocal();
     final schedStr = scheduledAt != null
         ? DateFormat('d MMM, h:mm a').format(scheduledAt)
         : '';
 
+    // Header gradient changes per status
+    final headerColors = _isOngoing
+        ? [const Color(0xFF064E3B), const Color(0xFF166534)]
+        : _isArrived
+        ? [const Color(0xFF78350F), const Color(0xFFB45309)]
+        : [_P.indigo, _P.violet];
+
     return Container(
       decoration: BoxDecoration(
         color: _P.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: _P.border),
-        boxShadow: [BoxShadow(
-            color: _P.purple.withOpacity(0.07),
-            blurRadius: 18, offset: const Offset(0, 5))],
+        boxShadow: [
+          BoxShadow(
+            color: _P.purple.withOpacity(0.09),
+            blurRadius: 28,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(children: [
-        // Header: timer (if ongoing) OR scheduled date (if accepted)
+
+        // ── Gradient header ──────────────────────────────────────────────
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-          decoration: const BoxDecoration(
-            color: Color(0xFFF5F3FF),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: headerColors,
+            ),
+            borderRadius:
+            const BorderRadius.vertical(top: Radius.circular(24)),
           ),
-          child: Row(children: [
-            if (_isOngoing) ...[
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(_clock,
-                    style: const TextStyle(
-                        color: _P.purple, fontSize: 28, fontWeight: FontWeight.w800,
-                        letterSpacing: 1.5,
-                        fontFeatures: [FontFeature.tabularFigures()])),
-                const Text('CURRENT SESSION TIME',
-                    style: TextStyle(
-                        color: _P.t3, fontSize: 8,
-                        fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Status pill + payment badge
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: BoxDecoration(
+                        color: _isOngoing
+                            ? AppColors.onlineGreen
+                            : _isArrived
+                            ? _P.amber
+                            : Colors.white70,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      _isOngoing
+                          ? (widget.isHindi ? 'जारी है' : 'IN PROGRESS')
+                          : _isArrived
+                          ? (widget.isHindi ? 'पहुँच गए' : 'ARRIVED')
+                          : (widget.isHindi ? 'आगामी' : 'UPCOMING'),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ]),
+                ),
+                const Spacer(),
+                _paymentBadge(d['paymentMethod'] as String?),
               ]),
-            ] else ...[
-              // Accepted — show service date instead of timer
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(schedStr,
-                    style: const TextStyle(
-                        color: _P.purple, fontSize: 16, fontWeight: FontWeight.w800)),
-                const Text('SCHEDULED DATE & TIME',
-                    style: TextStyle(
-                        color: _P.t3, fontSize: 8,
-                        fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-              ]),
+              const SizedBox(height: 14),
+
+              // Service name
+              Text(
+                svc,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Timer (ongoing) or scheduled time + amount
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (_isOngoing) ...[
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _clock,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 34,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 2.5,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                        const Text(
+                          'ELAPSED TIME',
+                          style: TextStyle(
+                            color: Colors.white54,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else ...[
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'SCHEDULED FOR',
+                          style: TextStyle(
+                            color: Colors.white54,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          schedStr.isNotEmpty ? schedStr : '—',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const Spacer(),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '₹${amount.toStringAsFixed(0)}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const Text(
+                        'YOUR EARNING',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ],
-            const Spacer(),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('₹${amount.toStringAsFixed(0)}',
-                  style: const TextStyle(
-                      color: _P.t1, fontSize: 22, fontWeight: FontWeight.w800)),
-              // Payment badge on card
-              _paymentBadge(d['paymentMethod'] as String?),
-            ]),
-          ]),
+          ),
         ),
 
+        // ── Booking progress stepper ─────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: _BookingProgressStepper(
+            status: _status,
+            isHindi: widget.isHindi,
+          ),
+        ),
+
+        // ── Destination ──────────────────────────────────────────────────
         if (address.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
                 color: const Color(0xFFF8F7FF),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: _P.border),
               ),
               child: Row(children: [
-                const Icon(Icons.location_on_rounded, color: _P.purple, size: 15),
-                const SizedBox(width: 8),
-                Expanded(child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('DESTINATION',
-                      style: TextStyle(
-                          color: _P.t3, fontSize: 8,
-                          fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-                  const SizedBox(height: 3),
-                  Text(address,
-                      style: const TextStyle(
-                          color: _P.t1, fontSize: 13,
-                          fontWeight: FontWeight.w600, height: 1.4)),
-                  const SizedBox(height: 4),
-                  GestureDetector(
-                    onTap: _openMaps,
-                    child: const Text('Open in Maps ↗',
-                        style: TextStyle(
-                            color: _P.purple, fontSize: 11,
-                            fontWeight: FontWeight.w600)),
+                Container(
+                  width: 38, height: 38,
+                  decoration: BoxDecoration(
+                    color: _P.red.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                ])),
+                  child: const Icon(Icons.location_on_rounded,
+                      color: _P.red, size: 18),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'DESTINATION',
+                        style: TextStyle(
+                          color: _P.t3,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        address,
+                        style: const TextStyle(
+                          color: _P.t1,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          height: 1.4,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: _openMaps,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: _P.purple.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: _P.purple.withOpacity(0.20)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.map_rounded,
+                            size: 13, color: _P.purple),
+                        SizedBox(width: 4),
+                        Text(
+                          'Maps',
+                          style: TextStyle(
+                            color: _P.purple,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ]),
             ),
           ),
 
-        // Quick replies — shown only when ongoing
+        // ── Quick replies (ongoing only) ─────────────────────────────────
         if (_isOngoing)
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('QUICK REPLIES',
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'QUICK REPLIES',
                   style: TextStyle(
-                      color: _P.t3, fontSize: 8,
-                      fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-              const SizedBox(height: 8),
-              Wrap(spacing: 8, runSpacing: 7,
-                children: replies.map((r) => GestureDetector(
-                  onTap: () => _reply(r),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-                    decoration: BoxDecoration(
+                    color: _P.t3,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 7,
+                  children: replies.map((r) => GestureDetector(
+                    onTap: () => _reply(r),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 13, vertical: 7),
+                      decoration: BoxDecoration(
                         color: _P.white,
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFFDDD6FE))),
-                    child: Text(r,
+                        border: Border.all(
+                            color: const Color(0xFFDDD6FE)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.03),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        r,
                         style: const TextStyle(
-                            color: _P.t2, fontSize: 12, fontWeight: FontWeight.w500)),
-                  ),
-                )).toList(),
-              ),
-            ]),
-          ),
-
-        // Action button — "Start Job" or "Mark Complete"
-        Padding(
-          padding: const EdgeInsets.all(14),
-          child: SizedBox(
-            width: double.infinity, height: 54,
-            child: _isOngoing
-                ? ElevatedButton.icon(
-              onPressed: _actionBusy ? null : _complete,
-              icon: _actionBusy
-                  ? const SizedBox(width: 16, height: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.check_circle_rounded, size: 20),
-              label: Text(widget.isHindi ? 'काम पूरा करें' : 'Mark Complete',
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF166534),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-            )
-                : ElevatedButton.icon(
-              // "Start Job" — only when status == 'accepted'
-              onPressed: _actionBusy ? null : _startJob,
-              icon: _actionBusy
-                  ? const SizedBox(width: 16, height: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.play_circle_rounded, size: 20),
-              label: Text(widget.isHindi ? 'काम शुरू करें' : 'Start Job',
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _P.purple,
-                foregroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
+                          color: _P.t2,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  )).toList(),
+                ),
+              ],
             ),
           ),
+
+        // ── Action button ─────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: _buildActionButton(),
         ),
       ]),
     );
@@ -1037,16 +1388,12 @@ class _PendingList extends StatefulWidget {
 }
 
 class _PendingListState extends State<_PendingList> {
-  // Cache the last known docs — prevents blank flash between snapshots
   List<QueryDocumentSnapshot> _cached = [];
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
-      // PageStorageKey preserves scroll position across tab switches
       key: const PageStorageKey('pending_list'),
-      // AFTER — match both 'booked' and legacy 'pending', sort in-memory
-      // AFTER — returns ONLY this helper's assigned bookings
       stream: FirebaseFirestore.instance
           .collection('bookings')
           .where('helperId', isEqualTo: widget.uid)
@@ -1054,16 +1401,22 @@ class _PendingListState extends State<_PendingList> {
           .limit(15)
           .snapshots(),
       builder: (ctx, snap) {
-        // Update cache with sort only when real data arrives
-        if (snap.hasData && snap.data!.docs.isNotEmpty) {
-          _cached = List<QueryDocumentSnapshot>.from(snap.data!.docs)
-            ..sort((a, b) {
-              final ta = ((a.data() as Map)['createdAt'] as Timestamp?)
-                  ?.millisecondsSinceEpoch ?? 0;
-              final tb = ((b.data() as Map)['createdAt'] as Timestamp?)
-                  ?.millisecondsSinceEpoch ?? 0;
-              return tb.compareTo(ta);
-            });
+        // ✅ FIX: always update cache — including when it becomes EMPTY
+        // Old code only updated when docs were non-empty, so accepted jobs
+        // stayed visible because _cached was never cleared.
+        if (snap.hasData) {
+          if (snap.data!.docs.isEmpty) {
+            _cached = [];
+          } else {
+            _cached = List<QueryDocumentSnapshot>.from(snap.data!.docs)
+              ..sort((a, b) {
+                final ta = ((a.data() as Map)['createdAt'] as Timestamp?)
+                    ?.millisecondsSinceEpoch ?? 0;
+                final tb = ((b.data() as Map)['createdAt'] as Timestamp?)
+                    ?.millisecondsSinceEpoch ?? 0;
+                return tb.compareTo(ta);
+              });
+          }
         }
 
         if (_cached.isEmpty &&
@@ -1071,10 +1424,8 @@ class _PendingListState extends State<_PendingList> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // No pending requests
         if (_cached.isEmpty) return _VisibilityCard(isHindi: widget.isHindi);
 
-        // Render from cache — never flashes blank
         return Column(
           children: _cached.map((doc) => _RequestCard(
             key: ValueKey(doc.id),
@@ -1114,80 +1465,26 @@ class _RequestCard extends StatefulWidget {
 }
 
 class _RequestCardState extends State<_RequestCard> {
-  // Auto-decline timer — only for instant bookings (scheduledAt within 2 hours)
-  Timer? _countdownTimer;
-  int _secondsLeft = 60;
-  bool _declined = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _maybeStartTimer();
-  }
-
-  void _maybeStartTimer() {
-    final scheduledAt =
-    (widget.data['scheduledAt'] as Timestamp?)?.toDate();
-    final now = DateTime.now();
-
-    // FIX 5: Only start 60s timer for instant bookings (< 2 hours away).
-    // Future-scheduled bookings must NOT be auto-declined.
-    final isInstant = scheduledAt == null ||
-        scheduledAt.difference(now).inHours < 2;
-
-    if (isInstant) {
-      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-        if (!mounted) { t.cancel(); return; }
-        setState(() => _secondsLeft--);
-        if (_secondsLeft <= 0) {
-          t.cancel();
-          _autoDecline();
-        }
-      });
-    }
-  }
-
-  Future<void> _autoDecline() async {
-    if (_declined) return;
-    _declined = true;
-    await FirebaseFirestore.instance
-        .collection('bookings').doc(widget.bookingId).update({
-      'status':      _Status.cancelled,
-      'cancelledBy': 'timeout',
-      'cancelledAt': FieldValue.serverTimestamp(),
-    });
-  }
+  // ✅ Timer completely removed — no auto-decline
 
   Future<void> _decline() async {
-    _countdownTimer?.cancel();
     await FirebaseFirestore.instance
-        .collection('bookings').doc(widget.bookingId).update({
+        .collection('bookings')
+        .doc(widget.bookingId)
+        .update({
       'status':      _Status.cancelled,
       'cancelledBy': 'helper',
       'cancelledAt': FieldValue.serverTimestamp(),
     });
   }
 
-
-  @override
-  /// Cancel timer before navigating to detail screen to prevent
-  /// two timers running simultaneously (race condition fix).
   void _openDetail(BuildContext context) {
-    _countdownTimer?.cancel();
-    _countdownTimer = null;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => IncomingBookingDetail(bookingId: widget.bookingId),
       ),
     );
-    // Do NOT restart timer on return — let Firestore status decide
-  }
-
-  @override
-  void dispose() {
-    _countdownTimer?.cancel();
-    super.dispose();
   }
 
   String _dist() {
@@ -1215,18 +1512,19 @@ class _RequestCardState extends State<_RequestCard> {
     if (n.contains('electr')) return (Icons.electrical_services_rounded,  const Color(0xFFF59E0B));
     if (n.contains('clean'))  return (Icons.cleaning_services_rounded,    const Color(0xFF10B981));
     if (n.contains('carpen') || n.contains('wood'))
-      return (Icons.handyman_rounded,                                      const Color(0xFF8B5CF6));
+      return (Icons.handyman_rounded, const Color(0xFF8B5CF6));
     if (n.contains('paint'))  return (Icons.format_paint_rounded,         const Color(0xFFEF4444));
     if (n.contains('ac') || n.contains('air'))
-      return (Icons.ac_unit_rounded,                                       const Color(0xFF06B6D4));
+      return (Icons.ac_unit_rounded, const Color(0xFF06B6D4));
     if (n.contains('pest'))   return (Icons.pest_control_rounded,         const Color(0xFF84CC16));
     if (n.contains('garden') || n.contains('yard'))
-      return (Icons.yard_rounded,                                          const Color(0xFF22C55E));
+      return (Icons.yard_rounded, const Color(0xFF22C55E));
     if (n.contains('pet'))    return (Icons.pets_rounded,                 const Color(0xFFF97316));
+    if (n.contains('video') || n.contains('photo'))
+      return (Icons.videocam_rounded, const Color(0xFF6366F1));
     return (Icons.home_repair_service_rounded, _P.purple);
   }
 
-  // FIX 3: Show accept confirmation with CUSTOMER's scheduledAt — no date picker
   Future<void> _showAcceptConfirm(BuildContext context) async {
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
@@ -1242,8 +1540,6 @@ class _RequestCardState extends State<_RequestCard> {
     await _accept(context);
   }
 
-  // FIX 3: Accept writes status: 'accepted' — scheduledAt is NEVER changed
-  // FIX 7: Also writes notification to customer
   Future<void> _accept(BuildContext context) async {
     final auth = context.read<AuthProvider>();
     final db   = FirebaseFirestore.instance;
@@ -1283,18 +1579,14 @@ class _RequestCardState extends State<_RequestCard> {
     }
 
     await batch.commit();
-    _countdownTimer?.cancel();
 
-    // ← FIX 6: create the shared /chats doc so user sees the conversation.
-    // Without this call, helpers who accept from the home dashboard (not the
-    // detail screen) never create the chat — user sees no conversation.
     await BookingChatService.instance.onBookingAccepted(
       bookingId:     widget.bookingId,
       helperId:      helperId,
       helperName:    helperName,
       helperPhoto:   '',
       userId:        userId,
-      userName:      '',   // not stored in booking doc per data model
+      userName:      '',
       serviceName:   svcName,
       scheduledTime: formatted,
     );
@@ -1304,145 +1596,178 @@ class _RequestCardState extends State<_RequestCard> {
   Widget build(BuildContext context) {
     final d      = widget.data;
     final svc    = d['serviceName'] as String? ?? 'Service';
-    // FIX: read baseAmount only — never platformFee
     final amount = _helperAmount(d);
     final ts     = (d['createdAt'] as Timestamp?)?.toDate();
     final dist   = _dist();
     final (icon, color) = _svcIcon(svc);
     final payMethod = d['paymentMethod'] as String?;
-
-    // FIX 5: timer only for instant bookings
     final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate();
-    final isInstant = scheduledAt == null ||
-        scheduledAt.difference(DateTime.now()).inHours < 2;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
         color: _P.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _P.border),
         boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 12, offset: const Offset(0, 3))],
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 16, offset: const Offset(0, 4))],
       ),
       child: Column(children: [
+        // ── Card top ──
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            Container(
-              width: 52, height: 52,
-              decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(14)),
-              child: Icon(icon, color: color, size: 26),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(svc,
-                  style: const TextStyle(
-                      color: _P.t1, fontSize: 15, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
-              Row(children: [
-                if (dist.isNotEmpty) ...[
-                  const Icon(Icons.near_me_rounded, size: 11, color: _P.purple),
-                  const SizedBox(width: 3),
-                  Text(dist,
-                      style: const TextStyle(
-                          color: _P.purple, fontSize: 11,
-                          fontWeight: FontWeight.w600)),
-                  const SizedBox(width: 8),
-                  Container(width: 3, height: 3,
-                      decoration: const BoxDecoration(
-                          color: _P.t3, shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                ],
-                if (ts != null)
-                  Text(_ago(ts),
-                      style: const TextStyle(color: _P.t3, fontSize: 11)),
-              ]),
-              // Scheduled date/time from customer's booking
-              if (scheduledAt != null) ...[
-                const SizedBox(height: 3),
-                Row(children: [
-                  const Icon(Icons.schedule_rounded, size: 11, color: _P.t2),
-                  const SizedBox(width: 3),
-                  Text(
-                    DateFormat('d MMM, h:mm a').format(scheduledAt.toLocal()),
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 54, height: 54,
+                decoration: BoxDecoration(
+                    color: color.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(16)),
+                child: Icon(icon, color: color, size: 26),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(svc,
                     style: const TextStyle(
-                        color: _P.t2, fontSize: 11, fontWeight: FontWeight.w500),
-                  ),
-                ]),
-              ],
-            ])),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('₹${amount.toStringAsFixed(0)}',
-                  style: const TextStyle(
-                      color: _P.t1, fontSize: 20, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 4),
-              // FIX 6: payment badge
-              _paymentBadge(payMethod),
-            ]),
-          ]),
+                        color: _P.t1, fontSize: 15,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 5),
+                if (dist.isNotEmpty)
+                  Row(children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _P.purple.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.near_me_rounded,
+                            size: 10, color: _P.purple),
+                        const SizedBox(width: 3),
+                        Text(dist,
+                            style: const TextStyle(
+                                color: _P.purple, fontSize: 10,
+                                fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                    const SizedBox(width: 8),
+                    if (ts != null)
+                      Text(_ago(ts),
+                          style: const TextStyle(
+                              color: _P.t3, fontSize: 11)),
+                  ]),
+                if (scheduledAt != null) ...[
+                  const SizedBox(height: 5),
+                  Row(children: [
+                    const Icon(Icons.schedule_rounded,
+                        size: 11, color: _P.t2),
+                    const SizedBox(width: 3),
+                    Text(
+                      DateFormat('d MMM, h:mm a')
+                          .format(scheduledAt.toLocal()),
+                      style: const TextStyle(
+                          color: _P.t2, fontSize: 11,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  ]),
+                ],
+              ])),
+              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text('₹${amount.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                        color: _P.t1, fontSize: 20,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 6),
+                _paymentBadge(payMethod),
+              ]),
+            ],
+          ),
         ),
 
-        // Countdown bar — only for instant bookings
-        if (isInstant && _secondsLeft > 0 && _secondsLeft <= 60)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(children: [
-              const Icon(Icons.timer_outlined, size: 12, color: _P.amber),
-              const SizedBox(width: 4),
-              Text('Auto-decline in ${_secondsLeft}s',
-                  style: const TextStyle(
-                      color: _P.amber, fontSize: 11, fontWeight: FontWeight.w600)),
-              const Spacer(),
-              SizedBox(
-                width: 120, height: 4,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: _secondsLeft / 60,
-                    backgroundColor: _P.amber.withOpacity(0.15),
-                    valueColor: const AlwaysStoppedAnimation<Color>(_P.amber),
-                  ),
-                ),
-              ),
-            ]),
+        // ── Divider + Actions ──
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F7FF),
+            borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(20)),
+            border: Border(top: BorderSide(color: _P.border)),
           ),
-
-        Divider(height: 1, color: _P.border),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(
+              horizontal: 12, vertical: 10),
           child: Row(children: [
-            Expanded(flex: 3, child: ElevatedButton(
+            // View details
+            GestureDetector(
+              onTap: () => _openDetail(context),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: _P.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _P.border),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.info_outline_rounded,
+                      size: 14, color: _P.t2),
+                  SizedBox(width: 5),
+                  Text('Details',
+                      style: TextStyle(
+                          color: _P.t2, fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: ElevatedButton(
               onPressed: () {
                 HapticFeedback.mediumImpact();
                 _showAcceptConfirm(context);
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: _P.green, foregroundColor: Colors.white,
-                elevation: 0, padding: const EdgeInsets.symmetric(vertical: 12),
+                backgroundColor: _P.green,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 11),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(22)),
               ),
-              child: Text(widget.isHindi ? 'स्वीकार करें' : 'ACCEPT',
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w800,
-                      letterSpacing: 0.6)),
-            )),
-            const SizedBox(width: 10),
-            Expanded(flex: 2, child: TextButton(
-              onPressed: _decline,
-              style: TextButton.styleFrom(
-                foregroundColor: _P.t2,
-                padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                widget.isHindi ? 'स्वीकार करें' : 'ACCEPT',
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6),
               ),
-              child: Text(widget.isHindi ? 'मना करें' : 'DECLINE',
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600)),
             )),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _decline,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: _P.red.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: _P.red.withOpacity(0.2)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.close_rounded,
+                      size: 14, color: _P.red.withOpacity(0.8)),
+                  const SizedBox(width: 4),
+                  Text(
+                    widget.isHindi ? 'मना करें' : 'DECLINE',
+                    style: TextStyle(
+                        color: _P.red.withOpacity(0.8),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ]),
+              ),
+            ),
           ]),
         ),
       ]),
@@ -1854,115 +2179,139 @@ class _HomeTab extends StatelessWidget {
 // Uses scheduledAt Timestamp range query — NOT the phantom 'scheduledDate' field
 // Only shows accepted + ongoing bookings
 // ═══════════════════════════════════════════════════════════════════════════
-class _TodayScheduleCard extends StatelessWidget {
+// ── Today schedule card ───────────────────────────────────────────────────────
+// StatefulWidget — persistent subscription prevents "No jobs" flash on rebuild.
+// Includes 'arrived' status alongside accepted + ongoing.
+class _TodayScheduleCard extends StatefulWidget {
   final String uid;
   final bool isHindi;
   const _TodayScheduleCard({required this.uid, required this.isHindi});
+  @override
+  State<_TodayScheduleCard> createState() => _TodayScheduleCardState();
+}
+
+class _TodayScheduleCardState extends State<_TodayScheduleCard> {
+  StreamSubscription<QuerySnapshot>? _sub;
+  // Each entry: {'scheduledAt': DateTime, 'serviceName': String}
+  List<Map<String, dynamic>> _slots = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(_TodayScheduleCard old) {
+    super.didUpdateWidget(old);
+    if (old.uid != widget.uid) {
+      _sub?.cancel();
+      _subscribe();
+    }
+  }
+
+  void _subscribe() {
+    if (widget.uid.isEmpty) return;
+    final now   = DateTime.now();
+    final start = Timestamp.fromDate(DateTime(now.year, now.month, now.day));
+    final end   = Timestamp.fromDate(
+        DateTime(now.year, now.month, now.day, 23, 59, 59));
+
+    _sub = FirebaseFirestore.instance
+        .collection('bookings')
+        .where('helperId', isEqualTo: widget.uid)
+        .where('scheduledAt', isGreaterThanOrEqualTo: start)
+        .where('scheduledAt', isLessThanOrEqualTo: end)
+        .snapshots()
+        .listen((snap) {
+      final slots = snap.docs
+          .where((doc) {
+        final s = (doc.data() as Map)['status'] as String? ?? '';
+        return s == _Status.accepted ||
+            s == _Status.arrived  ||
+            s == _Status.ongoing;
+      })
+          .map((doc) => doc.data() as Map<String, dynamic>)
+          .toList();
+      if (mounted) setState(() => _slots = slots);
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final now   = DateTime.now();
-    // Timestamp range for today
-    final start = Timestamp.fromDate(DateTime(now.year, now.month, now.day));
-    final end   = Timestamp.fromDate(DateTime(now.year, now.month, now.day, 23, 59, 59));
+    final count = _slots.length;
 
-    // REQUIRES COMPOSITE INDEX: helperId ASC + scheduledAt ASC + status (filter in-memory)
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('bookings')
-          .where('helperId', isEqualTo: uid)
-          .where('scheduledAt', isGreaterThanOrEqualTo: start)
-          .where('scheduledAt', isLessThanOrEqualTo: end)
-          .snapshots(),
-      builder: (ctx, snap) {
-        // Filter to only accepted + ongoing (exclude pending, completed, cancelled)
-        final docs = (snap.data?.docs ?? []).where((doc) {
-          final s = (doc.data() as Map)['status'] as String? ?? '';
-          return s == _Status.accepted || s == _Status.ongoing;
-        }).toList();
-
-        final count = docs.length;
-
-        return GestureDetector(
-          onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => const ScheduleScreen())),
-          child: Container(
-            padding: const EdgeInsets.all(16),
+    return GestureDetector(
+      onTap: () => Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const ScheduleScreen())),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [_P.purple.withOpacity(0.08), _P.purple.withOpacity(0.03)],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _P.purple.withOpacity(0.20)),
+        ),
+        child: Row(children: [
+          Container(
+            width: 48, height: 48,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  _P.purple.withOpacity(0.08),
-                  _P.purple.withOpacity(0.03),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _P.purple.withOpacity(0.20)),
-            ),
-            child: Row(children: [
-              Container(
-                width: 48, height: 48,
-                decoration: BoxDecoration(
-                    color: _P.purple.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(14)),
-                child: const Icon(Icons.calendar_today_rounded,
-                    color: _P.purple, size: 22),
-              ),
-              const SizedBox(width: 14),
-              Expanded(child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isHindi ? 'आज का शेड्यूल' : "Today's Schedule",
-                      style: const TextStyle(
-                          color: _P.t1, fontSize: 14,
-                          fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 3),
-                    if (count == 0)
-                      Text(
-                        isHindi ? 'आज कोई काम नहीं है' : 'No jobs scheduled today',
-                        style: const TextStyle(color: _P.t2, fontSize: 12),
-                      )
-                    else ...[
-                      Text(
-                        '$count ${isHindi ? 'काम शेड्यूल' : 'job${count > 1 ? "s" : ""} scheduled'}',
-                        style: const TextStyle(
-                            color: _P.purple, fontSize: 12,
-                            fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 5),
-                      // Time chips — extract from scheduledAt Timestamp
-                      Wrap(spacing: 6, children: docs.take(3).map((doc) {
-                        final scheduledAt =
-                        ((doc.data() as Map)['scheduledAt'] as Timestamp?)
-                            ?.toDate().toLocal();
-                        final t = scheduledAt != null
-                            ? DateFormat('h:mm a').format(scheduledAt)
-                            : '';
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                              color: _P.purple.withOpacity(0.10),
-                              borderRadius: BorderRadius.circular(20)),
-                          child: Text(t,
-                              style: const TextStyle(
-                                  color: _P.purple, fontSize: 10,
-                                  fontWeight: FontWeight.w700)),
-                        );
-                      }).toList()),
-                    ],
-                  ])),
-              const Icon(Icons.arrow_forward_ios_rounded,
-                  size: 13, color: _P.purple),
+                color: _P.purple.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(14)),
+            child: const Icon(Icons.calendar_today_rounded,
+                color: _P.purple, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(widget.isHindi ? 'आज का शेड्यूल' : "Today's Schedule",
+                  style: const TextStyle(
+                      color: _P.t1, fontSize: 14, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 3),
+              if (count == 0)
+                Text(
+                  widget.isHindi ? 'आज कोई काम नहीं है' : 'No jobs scheduled today',
+                  style: const TextStyle(color: _P.t2, fontSize: 12),
+                )
+              else ...[
+                Text(
+                  '$count ${widget.isHindi ? 'काम शेड्यूल' : 'job${count > 1 ? "s" : ""} scheduled'}',
+                  style: const TextStyle(
+                      color: _P.purple, fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 5),
+                Wrap(
+                  spacing: 6,
+                  children: _slots.take(3).map((d) {
+                    final sat = (d['scheduledAt'] as Timestamp?)?.toDate().toLocal();
+                    final t   = sat != null ? DateFormat('h:mm a').format(sat) : '';
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: _P.purple.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(20)),
+                      child: Text(t,
+                          style: const TextStyle(
+                              color: _P.purple, fontSize: 10,
+                              fontWeight: FontWeight.w700)),
+                    );
+                  }).toList(),
+                ),
+              ],
             ]),
           ),
-        );
-      },
+          const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: _P.purple),
+        ]),
+      ),
     );
   }
 }
@@ -2204,105 +2553,141 @@ class _ToggleCard extends StatelessWidget {
 }
 
 // ── Today earnings card ────────────────────────────────────────────────────
-class _EarningsCard extends StatelessWidget {
+// ── Today earnings card ───────────────────────────────────────────────────────
+// StatefulWidget with a persistent StreamSubscription so parent rebuilds
+// (e.g. GPS location ticks) never reset the displayed total to ₹0.
+class _EarningsCard extends StatefulWidget {
   final String uid;
   final bool isHindi;
   const _EarningsCard({required this.uid, required this.isHindi});
+  @override
+  State<_EarningsCard> createState() => _EarningsCardState();
+}
+
+class _EarningsCardState extends State<_EarningsCard> {
+  StreamSubscription<QuerySnapshot>? _sub;
+  double _total = 0;
+  int    _jobs  = 0;
+  static const double _goal = 1500.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(_EarningsCard old) {
+    super.didUpdateWidget(old);
+    // Only re-subscribe if the uid actually changed (e.g. user switched accounts).
+    if (old.uid != widget.uid) {
+      _sub?.cancel();
+      _subscribe();
+    }
+  }
+
+  void _subscribe() {
+    if (widget.uid.isEmpty) return;
+    final today = DateTime.now();
+    final start = Timestamp.fromDate(
+        DateTime(today.year, today.month, today.day));
+    _sub = FirebaseFirestore.instance
+        .collection('bookings')
+        .where('helperId',   isEqualTo: widget.uid)
+        .where('status',     isEqualTo: _Status.completed)
+        .where('completedAt', isGreaterThanOrEqualTo: start)
+        .snapshots()
+        .listen((snap) {
+      double total = 0;
+      int    jobs  = 0;
+      for (final doc in snap.docs) {
+        total += _helperAmount(doc.data() as Map<String, dynamic>);
+        jobs++;
+      }
+      if (mounted) setState(() { _total = total; _jobs = jobs; });
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (uid.isEmpty) return const SizedBox.shrink();
-    final today = DateTime.now();
-    final start = Timestamp.fromDate(DateTime(today.year, today.month, today.day));
-    const goal  = 1500.0;
+    if (widget.uid.isEmpty) return const SizedBox.shrink();
+    final pct = (_total / _goal).clamp(0.0, 1.0);
 
-    // REQUIRES COMPOSITE INDEX: helperId ASC + status ASC + completedAt ASC
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('bookings')
-          .where('helperId', isEqualTo: uid)
-          .where('status', isEqualTo: _Status.completed)
-          .where('completedAt', isGreaterThanOrEqualTo: start)
-          .snapshots(),
-      builder: (ctx, snap) {
-        double total = 0; int jobs = 0;
-        if (snap.hasData) {
-          for (final d in snap.data!.docs) {
-            final m = d.data() as Map<String, dynamic>;
-            // Helper only sees baseAmount
-            total += _helperAmount(m);
-            jobs++;
-          }
-        }
-        final pct = (total / goal).clamp(0.0, 1.0);
-
-        return Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-              color: _P.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _P.border),
-              boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 12, offset: const Offset(0, 3))]),
-          child: Row(children: [
-            Expanded(child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(isHindi ? 'आज की कमाई' : "Today's Earnings",
-                  style: const TextStyle(
-                      color: _P.t2, fontSize: 11, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 6),
-              Text('₹ ${total.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                      color: _P.t1, fontSize: 28, fontWeight: FontWeight.w800)),
-              if (jobs > 0) ...[
-                const SizedBox(height: 4),
-                Row(children: [
-                  const Icon(Icons.check_circle_rounded,
-                      color: _P.green, size: 13),
-                  const SizedBox(width: 4),
-                  Text(
-                      '$jobs ${isHindi ? 'काम पूरे' : 'job${jobs > 1 ? "s" : ""} done'}',
-                      style: const TextStyle(
-                          color: _P.green, fontSize: 11,
-                          fontWeight: FontWeight.w600)),
-                ]),
-              ],
-              const SizedBox(height: 12),
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: _P.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _P.border),
+        boxShadow: [BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 12, offset: const Offset(0, 3))],
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.isHindi ? 'आज की कमाई' : "Today's Earnings",
+                style: const TextStyle(
+                    color: _P.t2, fontSize: 11, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Text('₹ ${_total.toStringAsFixed(2)}',
+                style: const TextStyle(
+                    color: _P.t1, fontSize: 28, fontWeight: FontWeight.w800)),
+            if (_jobs > 0) ...[
+              const SizedBox(height: 4),
               Row(children: [
-                Text(isHindi ? 'लक्ष्य' : 'Daily Goal',
-                    style: const TextStyle(color: _P.t3, fontSize: 10)),
-                const Spacer(),
-                Text('₹${total.toStringAsFixed(0)} / ₹${goal.toInt()}',
-                    style: const TextStyle(
-                        color: _P.t3, fontSize: 10, fontWeight: FontWeight.w600)),
-              ]),
-              const SizedBox(height: 5),
-              ClipRRect(borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: pct, minHeight: 5,
-                  backgroundColor: const Color(0xFFEDE9FE),
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                      pct >= 1.0 ? _P.green : _P.purple),
+                const Icon(Icons.check_circle_rounded, color: _P.green, size: 13),
+                const SizedBox(width: 4),
+                Text(
+                  '$_jobs ${widget.isHindi ? 'काम पूरे' : 'job${_jobs > 1 ? "s" : ""} done'}',
+                  style: const TextStyle(
+                      color: _P.green, fontSize: 11, fontWeight: FontWeight.w600),
                 ),
-              ),
-            ])),
-            const SizedBox(width: 18),
-            SizedBox(width: 80, height: 80,
-              child: Stack(alignment: Alignment.center, children: [
-                CustomPaint(size: const Size(80, 80),
-                    painter: _RingPainter(pct: pct)),
-                Column(mainAxisSize: MainAxisSize.min, children: [
-                  Text('${(pct * 100).toInt()}%',
-                      style: const TextStyle(
-                          color: _P.t1, fontSize: 16, fontWeight: FontWeight.w800)),
-                  Text(isHindi ? 'लक्ष्य' : 'goal',
-                      style: const TextStyle(color: _P.t3, fontSize: 9)),
-                ]),
               ]),
+            ],
+            const SizedBox(height: 12),
+            Row(children: [
+              Text(widget.isHindi ? 'लक्ष्य' : 'Daily Goal',
+                  style: const TextStyle(color: _P.t3, fontSize: 10)),
+              const Spacer(),
+              Text('₹${_total.toStringAsFixed(0)} / ₹${_goal.toInt()}',
+                  style: const TextStyle(
+                      color: _P.t3, fontSize: 10, fontWeight: FontWeight.w600)),
+            ]),
+            const SizedBox(height: 5),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: pct,
+                minHeight: 5,
+                backgroundColor: const Color(0xFFEDE9FE),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                    pct >= 1.0 ? _P.green : _P.purple),
+              ),
             ),
           ]),
-        );
-      },
+        ),
+        const SizedBox(width: 18),
+        SizedBox(
+          width: 80, height: 80,
+          child: Stack(alignment: Alignment.center, children: [
+            CustomPaint(size: const Size(80, 80), painter: _RingPainter(pct: pct)),
+            Column(mainAxisSize: MainAxisSize.min, children: [
+              Text('${(pct * 100).toInt()}%',
+                  style: const TextStyle(
+                      color: _P.t1, fontSize: 16, fontWeight: FontWeight.w800)),
+              Text(widget.isHindi ? 'लक्ष्य' : 'goal',
+                  style: const TextStyle(color: _P.t3, fontSize: 9)),
+            ]),
+          ]),
+        ),
+      ]),
     );
   }
 }
@@ -2313,26 +2698,31 @@ class _RingPainter extends CustomPainter {
   @override
   void paint(Canvas c, Size sz) {
     final cx = sz.width / 2, cy = sz.height / 2, r = cx - 6;
-    final track = Paint()
-      ..color = const Color(0xFFEDE9FE)
-      ..style = PaintingStyle.stroke
+    c.drawCircle(Offset(cx, cy), r, Paint()
+      ..color       = const Color(0xFFEDE9FE)
+      ..style       = PaintingStyle.stroke
       ..strokeWidth = 7
-      ..strokeCap = StrokeCap.round;
-    final fill = Paint()
-      ..shader = const LinearGradient(colors: [_P.purple, Color(0xFF06B6D4)])
-          .createShader(Rect.fromCircle(center: Offset(cx, cy), radius: r))
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 7
-      ..strokeCap = StrokeCap.round;
-    c.drawCircle(Offset(cx, cy), r, track);
+      ..strokeCap   = StrokeCap.round);
     if (pct > 0) {
-      c.drawArc(Rect.fromCircle(center: Offset(cx, cy), radius: r),
-          -math.pi / 2, 2 * math.pi * pct, false, fill);
+      c.drawArc(
+        Rect.fromCircle(center: Offset(cx, cy), radius: r),
+        -math.pi / 2,
+        2 * math.pi * pct,
+        false,
+        Paint()
+          ..shader = const LinearGradient(colors: [_P.purple, Color(0xFF06B6D4)])
+              .createShader(Rect.fromCircle(center: Offset(cx, cy), radius: r))
+          ..style       = PaintingStyle.stroke
+          ..strokeWidth = 7
+          ..strokeCap   = StrokeCap.round,
+      );
     }
   }
   @override
   bool shouldRepaint(_RingPainter o) => o.pct != pct;
 }
+
+
 
 // ── Stats row ─────────────────────────────────────────────────────────────
 // ── Stats row — uses HelperModel directly, no extra Firestore stream ──────────
@@ -2460,140 +2850,166 @@ class _WaitingBanner extends StatelessWidget {
 }
 
 // ── Recent activity list ──────────────────────────────────────────────────
-class _ActivityList extends StatelessWidget {
+// ── Recent activity list ──────────────────────────────────────────────────────
+// StatefulWidget with persistent subscription — never flashes "No activity yet"
+// on parent rebuild.
+class _ActivityList extends StatefulWidget {
   final String uid;
   const _ActivityList({required this.uid});
+  @override
+  State<_ActivityList> createState() => _ActivityListState();
+}
+
+class _ActivityListState extends State<_ActivityList> {
+  StreamSubscription<QuerySnapshot>? _sub;
+  List<QueryDocumentSnapshot> _cached = [];
+  bool _firstLoad = true;
 
   static (IconData, Color) _meta(String s) {
     switch (s) {
       case _Status.completed: return (Icons.check_circle_rounded, _P.green);
-      case _Status.accepted:  return (Icons.handshake_rounded, _P.purple);
-      case _Status.ongoing:   return (Icons.play_circle_rounded, AppColors.onlineGreen);
-      case 'booked':          // _Status.pending == 'booked'
-      case 'pending':         // legacy literal 'pending'
-        return (Icons.pending_rounded, _P.amber);
-      default:                return (Icons.cancel_rounded, AppColors.danger);
+      case _Status.accepted:  return (Icons.handshake_rounded,    _P.purple);
+      case _Status.arrived:   return (Icons.location_on_rounded,  _P.amber);
+      case _Status.ongoing:   return (Icons.play_circle_rounded,  AppColors.onlineGreen);
+      case 'booked':
+      case 'pending':         return (Icons.pending_rounded,      _P.amber);
+      default:                return (Icons.cancel_rounded,       AppColors.danger);
     }
   }
 
   static String _ago(DateTime dt) {
     final d = DateTime.now().difference(dt);
-    if (d.inMinutes < 1) return 'now';
+    if (d.inMinutes < 1)  return 'now';
     if (d.inMinutes < 60) return '${d.inMinutes}m';
-    if (d.inHours < 24) return '${d.inHours}h';
+    if (d.inHours < 24)   return '${d.inHours}h';
     return '${d.inDays}d';
   }
 
   @override
+  void initState() {
+    super.initState();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(_ActivityList old) {
+    super.didUpdateWidget(old);
+    if (old.uid != widget.uid) {
+      _sub?.cancel();
+      _subscribe();
+    }
+  }
+
+  void _subscribe() {
+    if (widget.uid.isEmpty) return;
+    _sub = FirebaseFirestore.instance
+        .collection('bookings')
+        .where('helperId', isEqualTo: widget.uid)
+        .orderBy('createdAt', descending: true)
+        .limit(6)
+        .snapshots()
+        .listen((snap) {
+      if (mounted) {
+        setState(() {
+          _cached    = snap.docs;
+          _firstLoad = false;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (uid.isEmpty) return const SizedBox.shrink();
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('bookings')
-          .where('helperId', isEqualTo: uid)
-          .orderBy('createdAt', descending: true)
-          .limit(6)
-          .snapshots(),
-      builder: (ctx, snap) {
-        if (!snap.hasData) {
-          return Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-                color: _P.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _P.border)),
-            child: const Center(child: Text('No activity yet',
-                style: TextStyle(color: _P.t2, fontSize: 13))),
-          );
-        }
-        if (snap.data!.docs.isEmpty) {
-          return Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-                color: _P.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _P.border)),
-            child: const Center(child: Text('No activity yet',
-                style: TextStyle(color: _P.t2, fontSize: 13))),
-          );
-        }
+    if (widget.uid.isEmpty) return const SizedBox.shrink();
 
-        return Container(
-          decoration: BoxDecoration(
-              color: _P.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _P.border),
-              boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.03),
-                  blurRadius: 8, offset: const Offset(0, 2))]),
-          child: Column(
-            children: snap.data!.docs.asMap().entries.map((e) {
-              final doc    = e.value;
-              final d      = doc.data() as Map<String, dynamic>;
-              final status = d['status'] as String? ?? _Status.pending;
-              final svc    = d['serviceName'] as String? ?? 'Service';
-              // Helper only sees baseAmount
-              final amt    = _helperAmount(d);
-              final ts     = (d['createdAt'] as Timestamp?)?.toDate();
-              final isLast = e.key == snap.data!.docs.length - 1;
-              final (icon, color) = _meta(status);
+    // Show nothing while the very first snapshot is in flight
+    // (avoids the empty-state flash).
+    if (_firstLoad) return const SizedBox.shrink();
 
-              return KeyedSubtree(
-                key: ValueKey(doc.id),
-                child: Column(children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 11),
-                    child: Row(children: [
-                      Container(
-                          width: 36, height: 36,
-                          decoration: BoxDecoration(
-                              color: color.withOpacity(0.10),
-                              borderRadius: BorderRadius.circular(10)),
-                          child: Icon(icon, color: color, size: 16)),
-                      const SizedBox(width: 12),
-                      Expanded(child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(svc,
-                                style: const TextStyle(
-                                    color: _P.t1, fontSize: 13,
-                                    fontWeight: FontWeight.w600)),
-                            Text(status.toUpperCase(),
-                                style: const TextStyle(
-                                    color: _P.t3, fontSize: 9,
-                                    fontWeight: FontWeight.w600,
-                                    letterSpacing: 0.5)),
-                          ])),
-                      Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                                status == _Status.completed
-                                    ? '+₹${amt.toStringAsFixed(0)}'
-                                    : '₹${amt.toStringAsFixed(0)}',
-                                style: TextStyle(
-                                    color: status == _Status.completed
-                                        ? _P.green
-                                        : _P.t2,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700)),
-                            if (ts != null)
-                              Text(_ago(ts),
-                                  style: const TextStyle(
-                                      color: _P.t3, fontSize: 10)),
-                          ]),
-                    ]),
+    if (_cached.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+            color: _P.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _P.border)),
+        child: const Center(
+            child: Text('No activity yet',
+                style: TextStyle(color: _P.t2, fontSize: 13))),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _P.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _P.border),
+        boxShadow: [BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        children: _cached.asMap().entries.map((e) {
+          final doc    = e.value;
+          final d      = doc.data() as Map<String, dynamic>;
+          final status = d['status'] as String? ?? _Status.pending;
+          final svc    = d['serviceName'] as String? ?? 'Service';
+          final amt    = _helperAmount(d);
+          final ts     = (d['createdAt'] as Timestamp?)?.toDate();
+          final isLast = e.key == _cached.length - 1;
+          final (icon, color) = _meta(status);
+
+          return KeyedSubtree(
+            key: ValueKey(doc.id),
+            child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                child: Row(children: [
+                  Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                        color: color.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Icon(icon, color: color, size: 16),
                   ),
-                  if (!isLast)
-                    Divider(
-                        height: 1, color: _P.div,
-                        indent: 14, endIndent: 14),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(svc,
+                        style: const TextStyle(
+                            color: _P.t1, fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(status.toUpperCase(),
+                        style: const TextStyle(
+                            color: _P.t3, fontSize: 9,
+                            fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+                  ])),
+                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text(
+                      status == _Status.completed
+                          ? '+₹${amt.toStringAsFixed(0)}'
+                          : '₹${amt.toStringAsFixed(0)}',
+                      style: TextStyle(
+                          color: status == _Status.completed ? _P.green : _P.t2,
+                          fontSize: 13, fontWeight: FontWeight.w700),
+                    ),
+                    if (ts != null)
+                      Text(_ago(ts),
+                          style: const TextStyle(color: _P.t3, fontSize: 10)),
+                  ]),
                 ]),
-              );
-            }).toList(),
-          ),
-        );
-      },
+              ),
+              if (!isLast)
+                Divider(height: 1, color: _P.div, indent: 14, endIndent: 14),
+            ]),
+          );
+        }).toList(),
+      ),
     );
   }
 }
@@ -3074,4 +3490,145 @@ class _KycSteps extends StatelessWidget {
       ]);
     }).toList()),
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BOOKING PROGRESS STEPPER — mirrors the user-side tracking view (Image 3)
+// ═══════════════════════════════════════════════════════════════════════════
+class _BookingProgressStepper extends StatelessWidget {
+  final String status;
+  final bool isHindi;
+  const _BookingProgressStepper(
+      {required this.status, required this.isHindi});
+
+  // (en label, status key, icon)
+  static const _steps = [
+    ('Booked',          'booked',     Icons.bookmark_rounded),
+    ('Helper Assigned', 'accepted',   Icons.person_pin_rounded),
+    ('Helper Arrived',  'arrived',    Icons.location_on_rounded),
+    ('Work Started',    'ongoing',    Icons.play_circle_rounded),
+    ('Completed',       'completed',  Icons.check_circle_rounded),
+  ];
+
+  static const _stepsHi = [
+    'बुक हुआ', 'हेल्पर मिला', 'हेल्पर पहुँचा', 'काम शुरू', 'पूरा हुआ',
+  ];
+
+  int get _activeIndex {
+    switch (status) {
+      case _Status.pending:   return 0;
+      case _Status.accepted:  return 1;
+      case _Status.arrived:   return 2;
+      case _Status.ongoing:   return 3;
+      case _Status.completed: return 4;
+      default: return 0;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _activeIndex;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F7FF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _P.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'BOOKING PROGRESS',
+            style: TextStyle(
+              color: _P.t3,
+              fontSize: 8,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ..._steps.asMap().entries.map((e) {
+            final idx   = e.key;
+            final (label, _, icon) = e.value;
+            final hiLabel = _stepsHi[idx];
+            final isDone    = idx < active;
+            final isCurrent = idx == active;
+            final isLast    = idx == _steps.length - 1;
+
+            final dotColor = isDone
+                ? _P.green
+                : isCurrent
+                ? _P.purple
+                : Colors.transparent;
+            final borderColor = isDone
+                ? _P.green
+                : isCurrent
+                ? _P.purple
+                : _P.border;
+            final lineColor = isDone
+                ? _P.green.withOpacity(0.35)
+                : _P.border;
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Dot + connector line ──
+                Column(children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                      border:
+                      Border.all(color: borderColor, width: 2),
+                    ),
+                    child: Center(
+                      child: isDone
+                          ? const Icon(Icons.check_rounded,
+                          color: Colors.white, size: 13)
+                          : Icon(
+                        icon,
+                        color: isCurrent
+                            ? Colors.white
+                            : _P.t3,
+                        size: 12,
+                      ),
+                    ),
+                  ),
+                  if (!isLast)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      width: 2,
+                      height: 24,
+                      color: lineColor,
+                    ),
+                ]),
+                const SizedBox(width: 12),
+                // ── Label ──
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    isHindi ? hiLabel : label,
+                    style: TextStyle(
+                      color: isDone
+                          ? _P.green
+                          : isCurrent
+                          ? _P.purple
+                          : _P.t3,
+                      fontSize: 12,
+                      fontWeight: (isDone || isCurrent)
+                          ? FontWeight.w700
+                          : FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }),
+        ],
+      ),
+    );
+  }
 }

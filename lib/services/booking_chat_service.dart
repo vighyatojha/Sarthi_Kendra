@@ -247,4 +247,63 @@ class BookingChatService {
       });
     }
   }
+  // PASTE before the final closing brace of BookingChatService class
+
+  Future<void> onUserConfirmedPayment({
+    required String bookingId,
+    required String chatId,
+    required String paymentMethod,
+    required String helperId,
+  }) async {
+    await _fs.collection('chats').doc(chatId).update({
+      'userConfirmedComplete':   true,
+      'paymentMethod':           paymentMethod,
+      'paymentConfirmedAt':      FieldValue.serverTimestamp(),
+    }).catchError((_) {});
+
+    await _fs.collection('bookings').doc(bookingId).update({
+      'paymentMethod':          paymentMethod,
+      'userConfirmedComplete':  true,
+      'status':                 'awaitingHelperConfirmation',
+    }).catchError((_) {});
+  }
+
+  Future<void> onHelperConfirmedPaymentReceived({
+    required String bookingId,
+    required String chatId,
+    required String userId,
+    required String helperId,
+    required String helperName,
+    required String serviceName,
+  }) async {
+    await _fs.collection('chats').doc(chatId).update({
+      'helperConfirmedComplete': true,
+      'userConfirmedComplete':   true,
+      'bookingStatus':           'completed',
+    }).catchError((_) {});
+
+    await _fs.collection('bookings').doc(bookingId).update({
+      'status':           'completed',
+      'completedAt':      FieldValue.serverTimestamp(),
+      'paymentConfirmed': true,
+    }).catchError((_) {});
+
+    if (helperId.isNotEmpty) {
+      await _fs.collection('helpers').doc(helperId).update({
+        'completedJobs': FieldValue.increment(1),
+      }).catchError((_) {});
+    }
+
+    await RealtimeDbService.instance.sendReceiptReadyMessage(chatId: chatId);
+
+    await _fs.collection('notifications').doc(userId).collection('items').add({
+      'type':      'service_completed',
+      'title':     'Service Complete 🎉',
+      'body':      'Your $serviceName is complete. Download your receipt!',
+      'bookingId': bookingId,
+      'chatId':    chatId,
+      'read':      false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
 }

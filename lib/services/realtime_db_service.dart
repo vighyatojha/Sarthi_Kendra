@@ -154,6 +154,40 @@ class RealtimeDbService {
     });
   }
 
+  // PASTE after sendHelperConfirmedMessage method (after its closing brace)
+
+  Future<void> sendUserPaymentConfirmedMessage({
+    required String chatId,
+    required String paymentMethod,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _msgsRef(chatId).push().set({
+      'text': paymentMethod == 'upi'
+          ? '💳 The customer has confirmed UPI (online) payment. Have you received it?'
+          : '💳 The customer has confirmed cash payment. Have you received it?',
+      'senderId':   'system',
+      'senderName': 'Sarthi Kendra',
+      'senderRole': 'system',
+      'type':       'payment_confirmation_pending',
+      'paymentMethod': paymentMethod,
+      'timestamp':  now,
+      'read':       false,
+    });
+  }
+
+  Future<void> sendReceiptReadyMessage({required String chatId}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _msgsRef(chatId).push().set({
+      'text':       '🎉 Payment received and confirmed! The service is now complete. Download your receipt.',
+      'senderId':   'system',
+      'senderName': 'Sarthi Kendra',
+      'senderRole': 'system',
+      'type':       'receipt_ready',
+      'timestamp':  now,
+      'read':       false,
+    });
+  }
+
   // ─── NEW: Send system message when BOTH sides have confirmed ──────────────
   //
   // Appears as a celebration pill in both chats before the review sheet opens.

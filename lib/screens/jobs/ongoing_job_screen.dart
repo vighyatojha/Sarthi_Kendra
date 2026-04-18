@@ -8,6 +8,7 @@ import '../../services/realtime_db_service.dart';
 import '../../theme/app_theme.dart';
 import '../review/mutual_review_sheet.dart';
 import '../../providers/auth_provider.dart';
+import "../../services/booking_chat_service.dart";
 
 class OngoingJobScreen extends StatefulWidget {
   final String bookingId;
@@ -102,35 +103,49 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
   /// Shows confirmation sheet first to prevent accidental taps.
   Future<void> _confirmAndComplete(String helperUid) async {
     final confirmed = await showModalBottomSheet<bool>(
-      context:   context,
+      context:       context,
       isDismissible: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => _CompleteConfirmSheet(),
+      builder: (_) => const _CompleteConfirmSheet(),
     );
     if (confirmed != true) return;
 
     setState(() => _isUpdating = true);
     try {
       _timer?.cancel();
-      final db    = FirebaseFirestore.instance;
-      final batch = db.batch();
 
-      batch.update(db.collection('bookings').doc(widget.bookingId), {
-        'status':      'completed',
-        'completedAt': FieldValue.serverTimestamp(),
-        'updatedAt':   FieldValue.serverTimestamp(),
+      final doc     = await FirebaseFirestore.instance
+          .collection('bookings').doc(widget.bookingId).get();
+      final data    = doc.data() as Map<String, dynamic>? ?? {};
+      final chatId  = (data['chatId'] as String?) ?? widget.bookingId;
+      final userId  = (data['userId'] as String?) ?? '';
+      // ignore: use_build_context_synchronously
+      final helperName = context.read<AuthProvider>().helper?.name ?? '';
+
+      // Mark booking as helperCompleted — NOT fully done yet
+      await FirebaseFirestore.instance
+          .collection('bookings').doc(widget.bookingId).update({
+        'status':             'helperCompleted',
+        'helperCompletedAt':  FieldValue.serverTimestamp(),
+        'updatedAt':          FieldValue.serverTimestamp(),
       });
 
-      // FIX 10 — increment completedJobs on the helper document
-      if (helperUid.isNotEmpty) {
-        batch.update(db.collection('helpers').doc(helperUid), {
-          'completedJobs': FieldValue.increment(1),
-        });
-      }
+      // Notify user via BookingChatService (sends RTDB system message)
+      await BookingChatService.instance.onHelperConfirmedComplete(
+        bookingId:  widget.bookingId,
+        chatId:     chatId,
+        helperName: helperName,
+        userId:     userId,
+      );
 
-      await batch.commit();
-      // Completion dialog will be shown by the StreamBuilder listener
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:         Text('Customer notified to confirm payment!'),
+          backgroundColor: AppColors.success,
+          behavior:        SnackBarBehavior.floating,
+        ));
+      }
     } catch (_) {
       _snack('Update failed. Try again.', error: true);
     }
@@ -181,8 +196,34 @@ class _OngoingJobScreenState extends State<OngoingJobScreen>
                     (_) => _maybeStartTimer(startedAt));
           }
 
+          // ADD after the closing brace of the if (status == 'ongoing') block:
+
+          if (status == 'helperCompleted') {
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFD97706).withOpacity(0.5)),
+              ),
+              child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD97706))),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Waiting for customer to confirm payment…',
+                    style: TextStyle(color: Color(0xFFD97706),
+                        fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ]),
+            );
+          }
+
           // FIX 10 — when Firestore confirms 'completed', show dialog once
-          if (status == 'completed' && !_completionShown) {
+          if ((status == 'completed' || status == 'review_done') && !_completionShown) {
             _completionShown = true;
             WidgetsBinding.instance.addPostFrameCallback(
                     (_) => _showCompletionDialog());

@@ -48,6 +48,13 @@ class _HelperChatRoomState extends State<HelperChatRoomScreen> {
   final _scrollCtrl = ScrollController();
   bool  _isSending  = false;
 
+  final List<String> _quickReplies = [
+    "I'm on my way",
+    'Arrived at location',
+    'Job started',
+    '5 mins away',
+  ];
+
   bool _isCompleted             = false;
   bool _helperConfirmed         = false;
   bool _userConfirmed           = false;
@@ -426,6 +433,24 @@ class _HelperChatRoomState extends State<HelperChatRoomScreen> {
                     return _SystemMsg(text: msg['text'] ?? '');
                   }
 
+                  if (type == 'payment_confirmation_pending') {
+                    return _PaymentReceivedQuery(
+                      chatId:        widget.chatId,
+                      bookingId:     widget.bookingId ?? widget.chatId,
+                      userId:        widget.userId,
+                      helperName:    _myName,
+                      helperId:      _uid,
+                      paymentMethod: (msg['paymentMethod'] as String?) ?? 'cash',
+                      serviceName:   widget.serviceName ?? 'Service',
+                    );
+                  }
+
+                  if (type == 'receipt_ready') {
+                    return _SystemMsg(
+                      text: '🎉 Payment confirmed! Job complete. Check your earnings.',
+                    );
+                  }
+
                   final showDate = i == 0 ||
                       _diffDay(
                           (messages[i - 1]['timestamp'] as int?) ?? 0, ts);
@@ -611,87 +636,116 @@ class _HelperChatRoomState extends State<HelperChatRoomScreen> {
   // Input bar
   // ─────────────────────────────────────────────────────────────
   Widget _buildInputBar() {
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-          12, 10, 12, MediaQuery.of(context).padding.bottom + 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(
-            top: BorderSide(color: _rPurple.withOpacity(0.10))),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, -3)),
-        ],
-      ),
-      child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // ── Quick Replies Row ────────────────────────────────────────
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Row(
+            children: _quickReplies.map((reply) => GestureDetector(
+              onTap: () async {
+                await RealtimeDbService.instance.sendMessage(
+                  chatId:     widget.chatId,
+                  senderId:   _uid,
+                  senderName: _myName,
+                  text:       reply,
+                  role:       'helper',
+                );
+                await FirebaseFirestore.instance
+                    .collection('chats')
+                    .doc(widget.chatId)
+                    .update({
+                  'lastMessage':                  reply,
+                  'lastMessageTime':              FieldValue.serverTimestamp(),
+                  'unreadCount_${widget.userId}': FieldValue.increment(1),
+                }).catchError((_) {});
+                _scrollToBottom();
+              },
               child: Container(
-                constraints: const BoxConstraints(maxHeight: 120),
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF5F3FF),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: _rPurple.withOpacity(0.18)),
+                  color:        const Color(0xFFF5F3FF),
+                  borderRadius: BorderRadius.circular(20),
+                  border:       Border.all(color: _rPurple.withOpacity(0.30)),
                 ),
-                child: TextField(
-                  controller: _msgCtrl,
-                  maxLines:   null,
-                  textCapitalization: TextCapitalization.sentences,
-                  style: const TextStyle(
-                      color: Color(0xFF1E1B4B), fontSize: 14),
-                  decoration: const InputDecoration(
-                    hintText: 'Type a message...',
-                    hintStyle: TextStyle(
-                        color: Color(0xFFADB5BD), fontSize: 14),
-                    border:         InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 12),
+                child: Text(reply,
+                    style: const TextStyle(
+                        color: _rPurple, fontSize: 12, fontWeight: FontWeight.w500)),
+              ),
+            )).toList(),
+          ),
+        ),
+
+        // ── Text input + send button ──────────────────────────────────
+        Container(
+          padding: EdgeInsets.fromLTRB(
+              12, 6, 12, MediaQuery.of(context).padding.bottom + 10),
+          decoration: BoxDecoration(
+            color:  Colors.white,
+            border: Border(top: BorderSide(color: _rPurple.withOpacity(0.10))),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10, offset: const Offset(0, -3)),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Container(
+                  constraints: const BoxConstraints(maxHeight: 120),
+                  decoration: BoxDecoration(
+                    color:        const Color(0xFFF5F3FF),
+                    borderRadius: BorderRadius.circular(24),
+                    border:       Border.all(color: _rPurple.withOpacity(0.18)),
+                  ),
+                  child: TextField(
+                    controller:          _msgCtrl,
+                    maxLines:            null,
+                    textCapitalization:  TextCapitalization.sentences,
+                    style: const TextStyle(color: Color(0xFF1E1B4B), fontSize: 14),
+                    decoration: const InputDecoration(
+                      hintText:       'Type a message...',
+                      hintStyle:      TextStyle(color: Color(0xFFADB5BD), fontSize: 14),
+                      border:         InputBorder.none,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 10),
-            GestureDetector(
-              onTap: _isSending ? null : _send,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                width: 48, height: 48,
-                decoration: BoxDecoration(
-                  gradient: _isSending
-                      ? LinearGradient(colors: [
-                    _rPurple.withOpacity(0.4),
-                    _rPurple.withOpacity(0.4),
-                  ])
-                      : const LinearGradient(
-                    colors: [_rPurple, Color(0xFF9333EA)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: _isSending ? null : _send,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  width: 48, height: 48,
+                  decoration: BoxDecoration(
+                    gradient: _isSending
+                        ? LinearGradient(colors: [_rPurple.withOpacity(0.4), _rPurple.withOpacity(0.4)])
+                        : const LinearGradient(
+                        colors: [_rPurple, Color(0xFF9333EA)],
+                        begin: Alignment.topLeft, end: Alignment.bottomRight),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: _isSending ? [] : [
+                      BoxShadow(color: _rPurple.withOpacity(0.30),
+                          blurRadius: 10, offset: const Offset(0, 4)),
+                    ],
                   ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: _isSending
-                      ? []
-                      : [
-                    BoxShadow(
-                        color: _rPurple.withOpacity(0.30),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4)),
-                  ],
-                ),
-                child: Center(
-                  child: _isSending
-                      ? const SizedBox(
-                      width: 18, height: 18,
-                      child: CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.send_rounded,
-                      color: Colors.white, size: 20),
+                  child: Center(
+                    child: _isSending
+                        ? const SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                  ),
                 ),
               ),
-            ),
-          ]),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1166,4 +1220,124 @@ class _EmptyChat extends StatelessWidget {
       ]),
     ),
   );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYMENT RECEIVED QUERY WIDGET  (helper side)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PaymentReceivedQuery extends StatefulWidget {
+  final String chatId, bookingId, userId, helperName, helperId,
+      paymentMethod, serviceName;
+  const _PaymentReceivedQuery({
+    required this.chatId,
+    required this.bookingId,
+    required this.userId,
+    required this.helperName,
+    required this.helperId,
+    required this.paymentMethod,
+    required this.serviceName,
+  });
+  @override
+  State<_PaymentReceivedQuery> createState() => _PaymentReceivedQueryState();
+}
+
+class _PaymentReceivedQueryState extends State<_PaymentReceivedQuery> {
+  bool _answered  = false;
+  bool _isLoading = false;
+
+  Future<void> _onYes() async {
+    setState(() => _isLoading = true);
+    try {
+      await BookingChatService.instance.onHelperConfirmedPaymentReceived(
+        bookingId:   widget.bookingId,
+        chatId:      widget.chatId,
+        userId:      widget.userId,
+        helperId:    widget.helperId,
+        helperName:  widget.helperName,
+        serviceName: widget.serviceName,
+      );
+      if (mounted) setState(() { _answered = true; _isLoading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _onNo() async {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Please contact support if payment was not received.'),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_answered) {
+      return _SystemMsg(text: '✅ You confirmed payment received. Receipt sent to customer.');
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color:        const Color(0xFFFFF7ED),
+          borderRadius: BorderRadius.circular(16),
+          border:       Border.all(color: const Color(0xFFD97706).withOpacity(0.3)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Row(children: [
+            Icon(Icons.payment_rounded, color: Color(0xFFD97706), size: 16),
+            SizedBox(width: 8),
+            Expanded(child: Text(
+              'Customer confirmed payment. Have you received it?',
+              style: TextStyle(fontSize: 13, color: Color(0xFF92400E),
+                  fontWeight: FontWeight.w600),
+            )),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: _isLoading ? null : _onYes,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                  decoration: BoxDecoration(
+                    color:        const Color(0xFF059669),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: _isLoading
+                      ? const Center(child: SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)))
+                      : const Text('✓  Yes, Received',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white,
+                          fontWeight: FontWeight.bold, fontSize: 13)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: GestureDetector(
+                onTap: _onNo,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                  decoration: BoxDecoration(
+                    color:        const Color(0xFFFEE2E2),
+                    borderRadius: BorderRadius.circular(10),
+                    border:       Border.all(color: const Color(0xFFDC2626).withOpacity(0.3)),
+                  ),
+                  child: const Text('✗  No, Not Yet',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Color(0xFFDC2626),
+                          fontWeight: FontWeight.bold, fontSize: 13)),
+                ),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
 }
