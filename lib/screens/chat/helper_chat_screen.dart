@@ -26,6 +26,16 @@ extension _Op on Color {
   Color op(double a) => withOpacity(a);
 }
 
+/// Reads the customer name from a chat doc, trying every possible field key.
+String _resolveUserName(Map<String, dynamic> d) {
+  const keys = ['userName', 'customerName', 'name', 'displayName', 'userDisplayName'];
+  for (final k in keys) {
+    final v = d[k] as String?;
+    if (v != null && v.trim().isNotEmpty) return v.trim();
+  }
+  return 'Customer';
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ROOT — Chat Hub
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -104,15 +114,19 @@ class _HelperChatScreenState extends State<HelperChatScreen>
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(children: [
-            Container(
-              width: 38, height: 38,
-              decoration: BoxDecoration(
-                color: Colors.white.op(0.15),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.op(0.25)),
+            // ← BACK BUTTON ADDED HERE
+            GestureDetector(
+              onTap: () => Navigator.pop(context),
+              child: Container(
+                width: 38, height: 38,
+                decoration: BoxDecoration(
+                  color: Colors.white.op(0.15),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.op(0.25)),
+                ),
+                child: const Icon(Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white, size: 18),
               ),
-              child: const Icon(Icons.chat_bubble_rounded,
-                  color: Colors.white, size: 18),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -186,98 +200,331 @@ class _HelperChatScreenState extends State<HelperChatScreen>
   }
 }
 
+
+class _HelperMergedChat {
+  final String chatId;
+  final Set<String> allDocIds;
+  final Map<String, dynamic> data;
+
+  const _HelperMergedChat({
+    required this.chatId,
+    required this.allDocIds,
+    required this.data,
+  });
+
+  factory _HelperMergedChat.fromDoc(QueryDocumentSnapshot doc) =>
+      _HelperMergedChat(
+        chatId: doc.id,
+        allDocIds: {doc.id},
+        data: Map<String, dynamic>.from(doc.data() as Map),
+      );
+
+  _HelperMergedChat mergeWith(QueryDocumentSnapshot other) {
+    final otherData = other.data() as Map<String, dynamic>;
+    final myMsg     = data['lastMessage']      as String?    ?? '';
+    final otherMsg  = otherData['lastMessage'] as String?    ?? '';
+    final myTs      = data['lastMessageTime']      as Timestamp?;
+    final otherTs   = otherData['lastMessageTime'] as Timestamp?;
+
+    String activeChatId = chatId;
+    if (myMsg.isEmpty && otherMsg.isNotEmpty) {
+      activeChatId = other.id;
+    } else if (myMsg.isNotEmpty && otherMsg.isNotEmpty) {
+      if (otherTs != null && (myTs == null || otherTs.compareTo(myTs) > 0)) {
+        activeChatId = other.id;
+      }
+    }
+
+    final merged = Map<String, dynamic>.from(data);
+    for (final entry in otherData.entries) {
+      final existing = merged[entry.key];
+      if (existing == null ||
+          (existing is String && existing.isEmpty) ||
+          existing == false) {
+        merged[entry.key] = entry.value;
+      }
+    }
+// Always prefer the name from whichever doc actually has one
+    if (_resolveUserName(merged) == 'Customer') {
+      final nameFromOther = _resolveUserName(otherData);
+      if (nameFromOther != 'Customer') {
+        for (final k in ['userName','customerName','name','displayName','userDisplayName']) {
+          if ((otherData[k] as String?)?.isNotEmpty == true) {
+            merged[k] = otherData[k];
+            break;
+          }
+        }
+      }
+    }
+
+    if (activeChatId == other.id) {
+      if (otherMsg.isNotEmpty) merged['lastMessage']     = otherMsg;
+      if (otherTs != null)     merged['lastMessageTime'] = otherTs;
+    } else {
+      if (myMsg.isNotEmpty) merged['lastMessage']     = myMsg;
+      if (myTs != null)     merged['lastMessageTime'] = myTs;
+    }
+
+    return _HelperMergedChat(
+      chatId:    activeChatId,
+      allDocIds: {...allDocIds, other.id},
+      data:      merged,
+    );
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TAB 1 — Booking Chat List
 // ✅ FIX: removed orderBy('lastMessageTime') — now sorts client-side
 //         This eliminates the "Firestore index required" error
 // ═══════════════════════════════════════════════════════════════════════════════
-class _BookingChatList extends StatelessWidget {
+class _BookingChatList extends StatefulWidget {
   final String uid;
-  final bool hi;
+  final bool   hi;
   const _BookingChatList({required this.uid, required this.hi});
 
   @override
+  State<_BookingChatList> createState() => _BookingChatListState();
+}
+
+class _BookingChatListState extends State<_BookingChatList> {
+  final Set<String> _selected = {};
+  bool get _isSelecting => _selected.isNotEmpty;
+
+  void _toggleSelect(String chatId) => setState(() {
+    _selected.contains(chatId) ? _selected.remove(chatId) : _selected.add(chatId);
+  });
+
+  void _clearSelection() => setState(() => _selected.clear());
+
+  List<_HelperMergedChat> _mergeChats(List<QueryDocumentSnapshot> sorted) {
+    final Map<String, _HelperMergedChat> byKey = {};
+    for (final doc in sorted) {
+      final data      = doc.data() as Map<String, dynamic>;
+      final bookingId = data['bookingId'] as String? ?? '';
+      final userId    = data['userId']    as String? ?? '';
+      final key       = bookingId.isNotEmpty ? bookingId
+          : userId.isNotEmpty ? userId : doc.id;
+
+      if (!byKey.containsKey(key)) {
+        byKey[key] = _HelperMergedChat.fromDoc(doc);
+      } else {
+        byKey[key] = byKey[key]!.mergeWith(doc);
+      }
+    }
+    final result = byKey.values.toList()
+      ..sort((a, b) {
+        final aTs = a.data['lastMessageTime'] as Timestamp?;
+        final bTs = b.data['lastMessageTime'] as Timestamp?;
+        if (aTs == null && bTs == null) return 0;
+        if (aTs == null) return 1;
+        if (bTs == null) return -1;
+        return bTs.compareTo(aTs);
+      });
+    return result;
+  }
+
+  Future<void> _deleteSelected(List<_HelperMergedChat> mergedChats) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Delete ${_selected.length} Chat${_selected.length > 1 ? 's' : ''}?',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+        ),
+        content: const Text('This cannot be undone.',
+            style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF6B7280))),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _red,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Delete',
+                style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final allIds = <String>{};
+    for (final mc in mergedChats) {
+      if (_selected.contains(mc.chatId)) allIds.addAll(mc.allDocIds);
+    }
+    final batch = FirebaseFirestore.instance.batch();
+    for (final id in allIds) {
+      batch.delete(FirebaseFirestore.instance.collection('chats').doc(id));
+    }
+    await batch.commit();
+    _clearSelection();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (uid.isEmpty) return _emptyState();
+    if (widget.uid.isEmpty) return _emptyState();
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('chats')
-          .where('helperId', isEqualTo: uid)
-      // ✅ No orderBy — avoids composite index requirement
+          .where('helperId', isEqualTo: widget.uid)
           .snapshots(),
       builder: (ctx, snap) {
         if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
           return const Center(
-              child: CircularProgressIndicator(
-                  color: _purple, strokeWidth: 2));
+              child: CircularProgressIndicator(color: _purple, strokeWidth: 2));
         }
         if (snap.hasError) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.warning_amber_rounded,
-                    color: _amber, size: 48),
+                const Icon(Icons.warning_amber_rounded, color: _amber, size: 48),
                 const SizedBox(height: 12),
                 Text(
-                  hi
+                  widget.hi
                       ? 'चैट लोड नहीं हो सकी।'
                       : 'Could not load chats. Please try again.',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      color: Color(0xFF374151), fontSize: 14),
+                  style: const TextStyle(color: Color(0xFF374151), fontSize: 14),
                 ),
               ]),
             ),
           );
         }
 
-        final docs = snap.data?.docs ?? [];
+        final allDocs = snap.data?.docs ?? [];
+
+        // ✅ Only show chats where booking has been accepted by this helper
+        final docs = allDocs.where((doc) {
+          final d      = doc.data() as Map<String, dynamic>;
+          final status = (d['bookingStatus'] as String?) ?? '';
+          final userId = (d['userId'] as String?) ?? '';
+          return userId.isNotEmpty &&
+              status != 'pending' &&
+              status.isNotEmpty;
+        }).toList();
+
         if (docs.isEmpty) return _emptyState();
 
-        // ✅ Sort client-side by lastMessageTime descending
         final sorted = [...docs]..sort((a, b) {
-          final aData = a.data() as Map<String, dynamic>;
-          final bData = b.data() as Map<String, dynamic>;
-          final aTs = aData['lastMessageTime'] as Timestamp?;
-          final bTs = bData['lastMessageTime'] as Timestamp?;
+          final aTs = (a.data() as Map)['lastMessageTime'] as Timestamp?;
+          final bTs = (b.data() as Map)['lastMessageTime'] as Timestamp?;
           if (aTs == null && bTs == null) return 0;
           if (aTs == null) return 1;
           if (bTs == null) return -1;
           return bTs.compareTo(aTs);
         });
 
-        return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-          itemCount: sorted.length,
-          itemBuilder: (_, i) {
-            final d = sorted[i].data() as Map<String, dynamic>;
-            final chatId    = sorted[i].id;
-            final name      = (d['userName']        as String?) ?? 'Customer';
-            final userId    = (d['userId']          as String?) ?? '';
-            final lastMsg   = (d['lastMessage']     as String?) ?? '';
-            final time      = (d['lastMessageTime'] as Timestamp?)?.toDate();
-            final unread    = ((d['helperUnread']   ?? 0) as num).toInt();
-            final svc       = (d['serviceName']     as String?) ?? '';
-            final bookId    = (d['bookingId']       as String?) ?? '';
-            final status    = (d['bookingStatus']   as String?) ?? '';
-            final userPhoto = (d['userPhoto']       as String?);
+        final mergedChats = _mergeChats(sorted);
+        if (mergedChats.isEmpty) return _emptyState();
 
-            return _ChatTile(
-              chatId:        chatId,
-              bookingId:     bookId,
-              userId:        userId,
-              userName:      name,
-              lastMessage:   lastMsg,
-              lastTime:      time,
-              unreadCount:   unread,
-              serviceName:   svc,
-              bookingStatus: status,
-              userPhoto:     userPhoto,
-            );
-          },
-        );
+        return Column(children: [
+          // ── Selection bar ─────────────────────────────────────────
+          if (_isSelecting)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: _indigo,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(children: [
+                GestureDetector(
+                  onTap: _clearSelection,
+                  child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+                ),
+                const SizedBox(width: 12),
+                Text('${_selected.length} selected',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => _deleteSelected(mergedChats),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 6),
+                    decoration: BoxDecoration(
+                        color: _red,
+                        borderRadius: BorderRadius.circular(20)),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.delete_outline_rounded,
+                          color: Colors.white, size: 14),
+                      SizedBox(width: 5),
+                      Text('Delete',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold)),
+                    ]),
+                  ),
+                ),
+              ]),
+            ),
+
+          // ── Chat list ─────────────────────────────────────────────
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+              itemCount: mergedChats.length,
+              itemBuilder: (_, i) {
+                final mc         = mergedChats[i];
+                final d          = mc.data;
+                final isSelected = _selected.contains(mc.chatId);
+                final status     = (d['bookingStatus'] as String?) ?? '';
+                final isInactive = status == 'completed' || status == 'cancelled';
+
+                return _ChatTile(
+                  chatId:        mc.chatId,
+                  bookingId:     (d['bookingId']       as String?) ?? '',
+                  userId:        (d['userId']          as String?) ?? '',
+                  userName:      _resolveUserName(d),
+                  lastMessage:   (d['lastMessage']     as String?) ?? '',
+                  lastTime:      (d['lastMessageTime'] as Timestamp?)?.toDate(),
+                  unreadCount:   ((d['helperUnread']   ?? 0) as num).toInt(),
+                  serviceName:   (d['serviceName']     as String?) ?? '',
+                  bookingStatus: status,
+                  userPhoto:     d['userPhoto']        as String?,
+                  isSelected:    isSelected,
+                  isSelecting:   _isSelecting,
+                  onTap: () {
+                    if (_isSelecting) {
+                      _toggleSelect(mc.chatId);
+                      return;
+                    }
+                    if (isInactive) return; // ← block completed/cancelled
+                    RealtimeDbService.instance.resetHelperUnread(mc.chatId);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => HelperChatRoomScreen(
+                          chatId:      mc.chatId,
+                          bookingId:   (d['bookingId']    as String?) ?? '',
+                          userId:      (d['userId']       as String?) ?? '',
+                          userName:    (d['userName']     as String?) ?? 'Customer',
+                          serviceName: (d['serviceName']  as String?) ?? '',
+                          userPhoto:   d['userPhoto']     as String?,
+                        ),
+                      ),
+                    );
+                  },
+                  onLongPress: () => _toggleSelect(mc.chatId),
+                );
+              },
+            ),
+          ),
+        ]);
       },
     );
   }
@@ -295,7 +542,7 @@ class _BookingChatList extends StatelessWidget {
       ),
       const SizedBox(height: 18),
       Text(
-        hi ? 'कोई बुकिंग चैट नहीं' : 'No booking chats yet',
+        widget.hi ? 'कोई बुकिंग चैट नहीं' : 'No booking chats yet',
         style: const TextStyle(
             color: Color(0xFF1E1B4B),
             fontSize: 17,
@@ -303,7 +550,7 @@ class _BookingChatList extends StatelessWidget {
       ),
       const SizedBox(height: 8),
       Text(
-        hi
+        widget.hi
             ? 'बुकिंग स्वीकार करें तो चैट शुरू होगी'
             : 'Accept a booking to start chatting',
         style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
@@ -314,11 +561,15 @@ class _BookingChatList extends StatelessWidget {
 
 // ─── Chat list tile ───────────────────────────────────────────────────────────
 class _ChatTile extends StatelessWidget {
-  final String  chatId, bookingId, userId, userName,
+  final String    chatId, bookingId, userId, userName,
       lastMessage, serviceName, bookingStatus;
   final DateTime? lastTime;
   final int       unreadCount;
   final String?   userPhoto;
+  final bool      isSelected;
+  final bool      isSelecting;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   const _ChatTile({
     required this.chatId,
@@ -330,12 +581,17 @@ class _ChatTile extends StatelessWidget {
     required this.unreadCount,
     required this.serviceName,
     required this.bookingStatus,
+    required this.onTap,
+    required this.onLongPress,
     this.userPhoto,
+    this.isSelected  = false,
+    this.isSelecting = false,
   });
 
   Color get _statusColor {
     switch (bookingStatus.toLowerCase()) {
       case 'completed':   return _green;
+      case 'cancelled':   return _red;
       case 'accepted':    return _purple;
       case 'in_progress': return _cyan;
       default:            return _amber;
@@ -345,6 +601,7 @@ class _ChatTile extends StatelessWidget {
   String get _statusLabel {
     switch (bookingStatus.toLowerCase()) {
       case 'completed':   return 'Completed';
+      case 'cancelled':   return 'Cancelled';
       case 'accepted':    return 'Accepted';
       case 'in_progress': return 'In Progress';
       case 'ongoing':     return 'Ongoing';
@@ -354,176 +611,242 @@ class _ChatTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initials  = userName.isNotEmpty ? userName[0].toUpperCase() : 'C';
-    final hasUnread = unreadCount > 0;
+    final initials    = userName.isNotEmpty ? userName[0].toUpperCase() : 'C';
+    final hasUnread   = unreadCount > 0;
+    final isCompleted = bookingStatus.toLowerCase() == 'completed';
+    final isCancelled = bookingStatus.toLowerCase() == 'cancelled';
+    final isInactive  = isCompleted || isCancelled;
 
     return GestureDetector(
-      onTap: () async {
-        await RealtimeDbService.instance.resetHelperUnread(chatId);
-        if (context.mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => HelperChatRoomScreen(
-                chatId:      chatId,
-                bookingId:   bookingId,
-                userId:      userId,
-                userName:    userName,
-                serviceName: serviceName,
-                userPhoto:   userPhoto,
-              ),
-            ),
-          );
-        }
-      },
-      child: Container(
+      onTap:      onTap,
+      onLongPress: onLongPress,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: isSelected
+              ? _purple.op(0.08)
+              : isInactive
+              ? const Color(0xFFF8F8FB)
+              : Colors.white,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: hasUnread ? _purple.op(0.35) : const Color(0xFFEDE9FE),
-            width: hasUnread ? 1.5 : 1,
+            color: isSelected
+                ? _purple.op(0.50)
+                : hasUnread && !isInactive
+                ? _purple.op(0.35)
+                : const Color(0xFFEDE9FE),
+            width: isSelected || (hasUnread && !isInactive) ? 1.5 : 1,
           ),
-          boxShadow: [
+          boxShadow: isSelected
+              ? []
+              : [
             BoxShadow(
-                color: hasUnread
+                color: hasUnread && !isInactive
                     ? _purple.op(0.12)
                     : Colors.black.op(0.04),
-                blurRadius: hasUnread ? 16 : 8,
+                blurRadius: hasUnread && !isInactive ? 16 : 8,
                 offset: const Offset(0, 4)),
           ],
         ),
         child: Row(children: [
-          // ── Avatar ────────────────────────────────────────────────
-          Stack(children: [
-            Container(
-              width: 54, height: 54,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                    colors: [_purple.op(0.70), _purple],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight),
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: hasUnread ? _purple : _purple.op(0.20),
-                    width: 2),
-                image: (userPhoto != null && userPhoto!.isNotEmpty)
-                    ? DecorationImage(
-                    image: NetworkImage(userPhoto!),
-                    fit: BoxFit.cover)
+          // ── Checkbox ─────────────────────────────────────────────
+          if (isSelecting)
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 22, height: 22,
+                decoration: BoxDecoration(
+                  color: isSelected ? _purple : Colors.transparent,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isSelected ? _purple : const Color(0xFFD1D5DB),
+                    width: 2,
+                  ),
+                ),
+                child: isSelected
+                    ? const Icon(Icons.check_rounded, color: Colors.white, size: 13)
                     : null,
               ),
-              child: (userPhoto == null || userPhoto!.isEmpty)
-                  ? Center(
-                  child: Text(initials,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800)))
-                  : null,
             ),
-            if (hasUnread)
-              Positioned(
-                bottom: 0, right: 0,
-                child: Container(
-                  width: 18, height: 18,
-                  decoration: BoxDecoration(
-                      color: _red,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2)),
-                  child: Center(
-                    child: Text(
-                      unreadCount > 9 ? '9+' : '$unreadCount',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 8,
-                          fontWeight: FontWeight.w800),
+
+          // ── Avatar ───────────────────────────────────────────────
+          Opacity(
+            opacity: isInactive ? 0.55 : 1.0,
+            child: Stack(children: [
+              Container(
+                width: 54, height: 54,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                      colors: [_purple.op(0.70), _purple],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                      color: hasUnread && !isInactive ? _purple : _purple.op(0.20),
+                      width: 2),
+                  image: (userPhoto != null && userPhoto!.isNotEmpty)
+                      ? DecorationImage(
+                      image: NetworkImage(userPhoto!), fit: BoxFit.cover)
+                      : null,
+                ),
+                child: (userPhoto == null || userPhoto!.isEmpty)
+                    ? Center(
+                    child: Text(initials,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800)))
+                    : null,
+              ),
+              if (hasUnread && !isInactive)
+                Positioned(
+                  bottom: 0, right: 0,
+                  child: Container(
+                    width: 18, height: 18,
+                    decoration: BoxDecoration(
+                        color: _red,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2)),
+                    child: Center(
+                      child: Text(
+                        unreadCount > 9 ? '9+' : '$unreadCount',
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 8, fontWeight: FontWeight.w800),
+                      ),
                     ),
                   ),
                 ),
-              ),
-          ]),
+              if (isInactive)
+                Positioned(
+                  bottom: 0, right: 0,
+                  child: Container(
+                    width: 18, height: 18,
+                    decoration: BoxDecoration(
+                        color: isCompleted ? _green : _red,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2)),
+                    child: const Center(
+                        child: Icon(Icons.lock_rounded,
+                            color: Colors.white, size: 10)),
+                  ),
+                ),
+            ]),
+          ),
           const SizedBox(width: 13),
 
-          // ── Text ──────────────────────────────────────────────────
+          // ── Text ─────────────────────────────────────────────────
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
-                  Expanded(
-                    child: Text(userName,
-                        style: TextStyle(
-                            color: const Color(0xFF1E1B4B),
-                            fontSize: 15,
-                            fontWeight: hasUnread
-                                ? FontWeight.w800
-                                : FontWeight.w700)),
-                  ),
-                  if (lastTime != null)
-                    Text(_timeLabel(lastTime!),
-                        style: TextStyle(
-                            color: hasUnread
-                                ? _purple
-                                : const Color(0xFF94A3B8),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600)),
-                ]),
-                const SizedBox(height: 4),
-                Row(children: [
-                  Container(
-                    width: 7, height: 7,
-                    decoration: BoxDecoration(
-                        color: _statusColor, shape: BoxShape.circle),
-                  ),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      serviceName.isNotEmpty ? serviceName : _statusLabel,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Text(userName,
                       style: TextStyle(
-                          color: _statusColor,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 4),
-                Row(children: [
-                  Expanded(
-                    child: Text(
-                      lastMessage.isEmpty ? 'No messages yet' : lastMessage,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                          color: isInactive
+                              ? const Color(0xFF9CA3AF)
+                              : const Color(0xFF1E1B4B),
+                          fontSize: 15,
+                          fontWeight: hasUnread && !isInactive
+                              ? FontWeight.w800
+                              : FontWeight.w700)),
+                ),
+                if (lastTime != null)
+                  Text(_timeLabel(lastTime!),
                       style: TextStyle(
-                          color: hasUnread
-                              ? const Color(0xFF374151)
+                          color: hasUnread && !isInactive
+                              ? _purple
                               : const Color(0xFF94A3B8),
-                          fontSize: 13,
-                          fontWeight: hasUnread
-                              ? FontWeight.w600
-                              : FontWeight.w400),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600)),
+              ]),
+              const SizedBox(height: 4),
+              Row(children: [
+                Container(
+                  width: 7, height: 7,
+                  decoration:
+                  BoxDecoration(color: _statusColor, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    serviceName.isNotEmpty ? serviceName : _statusLabel,
+                    style: TextStyle(
+                        color: _statusColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (isInactive)
+                  Container(
+                    margin: const EdgeInsets.only(left: 6),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isCompleted
+                          ? _green.op(0.12)
+                          : _red.op(0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      isCompleted ? 'Completed' : 'Cancelled',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: isCompleted ? _green : _red),
                     ),
                   ),
-                  if (hasUnread)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                          color: _purple,
-                          borderRadius: BorderRadius.circular(12)),
-                      child: Text('$unreadCount',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800)),
-                    ),
-                ]),
-              ],
-            ),
+              ]),
+              const SizedBox(height: 4),
+              Row(children: [
+                Expanded(
+                  child: Text(
+                    isCompleted
+                        ? 'Service completed — chat closed'
+                        : isCancelled
+                        ? 'Booking cancelled — chat closed'
+                        : lastMessage.isEmpty
+                        ? 'No messages yet'
+                        : lastMessage,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: isInactive
+                            ? const Color(0xFFB0B8CC)
+                            : hasUnread
+                            ? const Color(0xFF374151)
+                            : const Color(0xFF94A3B8),
+                        fontSize: 13,
+                        fontStyle: isInactive
+                            ? FontStyle.italic
+                            : FontStyle.normal,
+                        fontWeight: hasUnread && !isInactive
+                            ? FontWeight.w600
+                            : FontWeight.w400),
+                  ),
+                ),
+                if (hasUnread && !isInactive)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                        color: _purple,
+                        borderRadius: BorderRadius.circular(12)),
+                    child: Text('$unreadCount',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800)),
+                  ),
+                if (isInactive)
+                  Icon(Icons.lock_outline_rounded,
+                      size: 14,
+                      color: isCompleted ? _green.op(0.6) : _red.op(0.6)),
+              ]),
+            ]),
           ),
         ]),
       ),

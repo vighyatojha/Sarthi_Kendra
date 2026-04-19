@@ -361,10 +361,18 @@ class _HelperChatRoomState extends State<HelperChatRoomScreen> {
 
   // ── View booking details ─────────────────────────────────────────────────
   void _viewBookingDetails() {
-    Navigator.pop(context); // close sheet
-    // Replace with your BookingDetailScreen navigation if available:
-    // Navigator.push(context, MaterialPageRoute(builder: (_) => BookingDetailScreen(bookingId: widget.bookingId)));
-    Navigator.pop(context); // fallback: go back to list
+    Navigator.pop(context); // close options sheet
+    if ((widget.bookingId ?? '').isEmpty) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _BookingDetailsSheet(
+        bookingId:   widget.bookingId!,
+        serviceName: widget.serviceName ?? '',
+        userName:    widget.userName,
+      ),
+    );
   }
 
   void _showOptionsMenu() {
@@ -682,9 +690,9 @@ class _HelperChatRoomState extends State<HelperChatRoomScreen> {
         // ── Text input + send button ──────────────────────────────────
         Container(
           padding: EdgeInsets.fromLTRB(
-              12, 6, 12, MediaQuery.of(context).padding.bottom + 10),
+              12, 10, 12, MediaQuery.of(context).padding.bottom + 12),
           decoration: BoxDecoration(
-            color:  Colors.white,
+            color: Colors.white,
             border: Border(top: BorderSide(color: _rPurple.withOpacity(0.10))),
             boxShadow: [
               BoxShadow(color: Colors.black.withOpacity(0.05),
@@ -695,23 +703,28 @@ class _HelperChatRoomState extends State<HelperChatRoomScreen> {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
-                child: Container(
-                  constraints: const BoxConstraints(maxHeight: 120),
-                  decoration: BoxDecoration(
-                    color:        const Color(0xFFF5F3FF),
-                    borderRadius: BorderRadius.circular(24),
-                    border:       Border.all(color: _rPurple.withOpacity(0.18)),
-                  ),
-                  child: TextField(
-                    controller:          _msgCtrl,
-                    maxLines:            null,
-                    textCapitalization:  TextCapitalization.sentences,
-                    style: const TextStyle(color: Color(0xFF1E1B4B), fontSize: 14),
-                    decoration: const InputDecoration(
-                      hintText:       'Type a message...',
-                      hintStyle:      TextStyle(color: Color(0xFFADB5BD), fontSize: 14),
-                      border:         InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                child: TextField(
+                  controller:         _msgCtrl,
+                  maxLines:           null,
+                  textCapitalization: TextCapitalization.sentences,
+                  style: const TextStyle(color: Color(0xFF1E1B4B), fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText:      'Type a message...',
+                    hintStyle:     const TextStyle(color: Color(0xFFADB5BD), fontSize: 14),
+                    filled:        true,
+                    fillColor:     const Color(0xFFF5F3FF),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(28),
+                      borderSide: BorderSide(color: _rPurple.withOpacity(0.20)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(28),
+                      borderSide: BorderSide(color: _rPurple.withOpacity(0.20)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(28),
+                      borderSide: BorderSide(color: _rPurple.withOpacity(0.50), width: 1.5),
                     ),
                   ),
                 ),
@@ -1339,5 +1352,320 @@ class _PaymentReceivedQueryState extends State<_PaymentReceivedQuery> {
         ]),
       ),
     );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING DETAILS BOTTOM SHEET
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _BookingDetailsSheet extends StatelessWidget {
+  final String bookingId;
+  final String serviceName;
+  final String userName;
+
+  const _BookingDetailsSheet({
+    required this.bookingId,
+    required this.serviceName,
+    required this.userName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFFF8F7FF),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).padding.bottom + 24,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Handle ────────────────────────────────────────────────
+          const SizedBox(height: 12),
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE5E7EB),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Header ────────────────────────────────────────────────
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF2D1B69), Color(0xFF5B21B6), Color(0xFF7C3AED)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(children: [
+              Container(
+                width: 46, height: 46,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.receipt_long_rounded,
+                    color: Colors.white, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Booking Details',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 2),
+                  Text('ID: $bookingId',
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.70),
+                          fontSize: 11)),
+                ]),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Content — streamed from Firestore ─────────────────────
+          // ── Content — fetched directly by doc ID ──────────────────
+          FutureBuilder<DocumentSnapshot>(
+            future: FirebaseFirestore.instance
+                .collection('bookings')
+                .doc(bookingId)
+                .get(),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: CircularProgressIndicator(
+                      color: _rPurple, strokeWidth: 2),
+                );
+              }
+
+              // ── Read all fields using same keys as dashboard ───────
+              final d = (snap.data?.exists == true)
+                  ? (snap.data!.data() as Map<String, dynamic>)
+                  : <String, dynamic>{};
+
+              final status    = (d['status']       as String?) ?? 'active';
+              final service   = (d['serviceName']  as String?) ?? serviceName;
+
+              // Customer name — try every key the user app might write
+              // Customer name — use the name passed from chat screen directly
+              // (booking doc's 'userName' field can be ambiguous — skip it)
+              final customer = (d['customerName'] as String?)?.trim().isNotEmpty == true
+                  ? d['customerName'] as String
+                  : userName; // always the customer name passed from HelperChatRoomScreen
+
+              // Address — same keys as dashboard _OngoingCard
+              final address   = (d['address']      as String?)?.trim().isNotEmpty == true
+                  ? d['address']     as String
+                  : (d['userAddress'] as String?)?.trim().isNotEmpty == true
+                  ? d['userAddress'] as String
+                  : '—';
+
+              // Date — dashboard uses scheduledAt Timestamp
+              final scheduledAt = (d['scheduledAt'] as Timestamp?)?.toDate()?.toLocal()
+                  ?? (d['createdAt']  as Timestamp?)?.toDate()?.toLocal();
+
+              // Amount — dashboard uses baseAmount (platformFee is app-only)
+              final rawAmt    = d['baseAmount'] ?? d['amount'] ?? d['price'];
+              final amtStr    = rawAmt != null
+                  ? '₹${(rawAmt is num ? rawAmt.toDouble() : double.tryParse(rawAmt.toString()) ?? 0).toStringAsFixed(0)}'
+                  : '—';
+
+              final payMethod = (d['paymentMethod'] as String?)?.trim().isNotEmpty == true
+                  ? d['paymentMethod'] as String
+                  : '—';
+
+              final notes     = (d['notes']        as String?) ?? '';
+              final helperName = (d['helperName']  as String?) ?? '—';
+
+              final statusColor = _statusColor(status);
+              final statusLabel = _statusLabel(status);
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(children: [
+                  // ── Status chip ──────────────────────────────────
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                          color: statusColor.withOpacity(0.25)),
+                    ),
+                    child: Row(children: [
+                      Container(
+                        width: 10, height: 10,
+                        decoration: BoxDecoration(
+                            color: statusColor,
+                            shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 10),
+                      Text('Status: $statusLabel',
+                          style: TextStyle(
+                              color: statusColor,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13)),
+                    ]),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // ── Detail rows ──────────────────────────────────
+                  _DetailCard(children: [
+                    _DetailRow(
+                        icon: Icons.build_circle_outlined,
+                        label: 'Service',
+                        value: service),
+                    _DetailRow(
+                        icon: Icons.person_outline_rounded,
+                        label: 'Customer',
+                        value: customer),
+                    _DetailRow(
+                        icon: Icons.person_pin_rounded,
+                        label: 'Helper',
+                        value: helperName),
+                    if (scheduledAt != null)
+                      _DetailRow(
+                          icon: Icons.calendar_today_rounded,
+                          label: 'Scheduled For',
+                          value: DateFormat('d MMM yyyy, h:mm a')
+                              .format(scheduledAt)),
+                    _DetailRow(
+                        icon: Icons.location_on_outlined,
+                        label: 'Address',
+                        value: address),
+                    _DetailRow(
+                        icon: Icons.currency_rupee_rounded,
+                        label: 'Your Earning',
+                        value: amtStr),
+                    _DetailRow(
+                        icon: Icons.payment_rounded,
+                        label: 'Payment Method',
+                        value: payMethod,
+                        isLast: notes.isEmpty),
+                    if (notes.isNotEmpty)
+                      _DetailRow(
+                          icon: Icons.notes_rounded,
+                          label: 'Notes',
+                          value: notes,
+                          isLast: true),
+                  ]),
+                ]),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _statusColor(String s) {
+    switch (s.toLowerCase()) {
+      case 'completed':   return const Color(0xFF059669);
+      case 'cancelled':   return const Color(0xFFDC2626);
+      case 'accepted':    return _rPurple;
+      case 'in_progress': return const Color(0xFF06B6D4);
+      default:            return const Color(0xFFF59E0B);
+    }
+  }
+
+  String _statusLabel(String s) {
+    switch (s.toLowerCase()) {
+      case 'completed':   return 'Completed';
+      case 'cancelled':   return 'Cancelled';
+      case 'accepted':    return 'Accepted';
+      case 'in_progress': return 'In Progress';
+      default:            return s.isEmpty ? 'Pending' : s;
+    }
+  }
+}
+
+class _DetailCard extends StatelessWidget {
+  final List<Widget> children;
+  const _DetailCard({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(children: children),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final IconData icon;
+  final String   label, value;
+  final bool     isLast;
+
+  const _DetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 34, height: 34,
+            decoration: BoxDecoration(
+              color: _rPurple.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: _rPurple, size: 17),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9CA3AF),
+                      fontWeight: FontWeight.w500)),
+              const SizedBox(height: 2),
+              Text(value,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF1F2937),
+                      fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ]),
+      ),
+      if (!isLast)
+        const Divider(height: 1, color: Color(0xFFF3F4F6),
+            indent: 16, endIndent: 16),
+    ]);
   }
 }

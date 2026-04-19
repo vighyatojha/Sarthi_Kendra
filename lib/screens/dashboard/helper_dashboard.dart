@@ -9,6 +9,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import '../../services/booking_chat_service.dart';
 import '../schedule/schedule_screen.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../location/helper_navigation_map_screen.dart';
 import '../location/helper_location_screen.dart';
 
 import '../../theme/app_theme.dart';
@@ -835,19 +837,21 @@ class _OngoingCardState extends State<_OngoingCard> {
     final loc  = widget.data['userLocation'] as GeoPoint?;
     final addr = widget.data['address'] as String?
         ?? widget.data['userAddress'] as String? ?? '';
-    Uri uri;
-    if (loc != null) {
-      uri = Uri.parse(
-          'https://maps.google.com/?q=${loc.latitude},${loc.longitude}');
-    } else if (addr.isNotEmpty) {
-      uri = Uri.parse(
-          'https://maps.google.com/?q=${Uri.encodeComponent(addr)}');
-    } else {
-      return;
-    }
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+
+    if (loc == null && addr.isEmpty) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => HelperNavigationMapScreen(
+          destination: loc != null
+              ? LatLng(loc.latitude, loc.longitude)
+              : null,
+          destinationAddress: addr,
+          helperCurrentPos: widget.data['_cachedPos'] as Position?,
+        ),
+      ),
+    );
   }
 
   // ── Action button factory ─────────────────────────────────────────────────

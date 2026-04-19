@@ -45,77 +45,177 @@ const _Cat({required this.en,required this.hi,required this.gu,
   required this.icon,required this.color,required this.bg,required this.svcs}); }
 
 // (All category data preserved — abbreviated here for clarity, see original file)
+// ── 12 Categories (full list) ─────────────────────────────────────────────
 const _kCats = <_Cat>[
-  _Cat(en:'Home Services',hi:'घर सेवाएं',gu:'ઘર સેવા',
-      icon:Icons.home_repair_service_rounded,
-      color:Color(0xFF7C3AED),bg:Color(0xFFEDE9FE),
-      svcs:[
-        _Svc('Plumber','प्लंबर','પ્લમ્બર',Icons.water_drop_outlined),
-        _Svc('Electrician','इलेक्ट्रीशियन','ઇલેક્ટ્રિશિયન',Icons.bolt_outlined),
-        _Svc('Carpenter','बढ़ई','સુથાર',Icons.carpenter),
-        _Svc('AC Repair','एसी रिपेयर','AC રિપેર',Icons.ac_unit_outlined),
-        _Svc('Painter','पेंटर','પેઇન્ટર',Icons.format_paint_outlined),
-        _Svc('Cleaner','सफाईकर्मी','સફાઈ કર્મી',Icons.cleaning_services_outlined),
-      ]),
-  _Cat(en:'Vehicle',hi:'वाहन सेवाएं',gu:'વાહન',
-      icon:Icons.directions_car_rounded,
-      color:Color(0xFF0284C7),bg:Color(0xFFE0F2FE),
-      svcs:[
-        _Svc('Car Mechanic','कार मैकेनिक','કાર મિકેનિક',Icons.car_repair),
-        _Svc('Bike Mechanic','बाइक मैकेनिक','બાઇક મિકેનિક',Icons.two_wheeler),
-        _Svc('Car Wash','कार वॉश','કાર વૉશ',Icons.local_car_wash_outlined),
-        _Svc('Puncture Repair','पंचर रिपेयर','પંચર રિપેર',Icons.tire_repair),
-      ]),
-  _Cat(en:'Emergency',hi:'आपातकाल',gu:'કટોકટી',
-      icon:Icons.local_hospital_rounded,
-      color:Color(0xFFDC2626),bg:Color(0xFFFEE2E2),
-      svcs:[
-        _Svc('Ambulance','एम्बुलेंस','એમ્બ્યુલન્સ',Icons.local_hospital_outlined),
-        _Svc('First Aid','प्राथमिक चिकित्सा','પ્રાથમિક સારવાર',Icons.medical_services_outlined),
-        _Svc('Blood Donor','रक्तदाता','રક્ત દાતા',Icons.bloodtype_outlined),
-      ]),
-  _Cat(en:'Delivery',hi:'डिलीवरी',gu:'ડિલિવરી',
-      icon:Icons.local_shipping_rounded,
-      color:Color(0xFFD97706),bg:Color(0xFFFEF3C7),
-      svcs:[
-        _Svc('Grocery Delivery','किराना डिलीवरी','કરિયાણા ડિલિવરી',Icons.shopping_basket_outlined),
-        _Svc('Medicine Delivery','दवा डिलीवरी','દવા ડિલિવરી',Icons.medication_outlined),
-        _Svc('Parcel Pickup','पार्सल पिकअप','પાર્સલ પિકઅપ',Icons.local_post_office_outlined),
-      ]),
-  _Cat(en:'Technical',hi:'तकनीकी',gu:'ટેકનિકલ',
-      icon:Icons.build_rounded,
-      color:Color(0xFF0891B2),bg:Color(0xFFCFFAFE),
-      svcs:[
-        _Svc('Mobile Repair','मोबाइल रिपेयर','મોબાઇલ રિપેર',Icons.phone_android_outlined),
-        _Svc('Laptop Repair','लैपटॉप रिपेयर','લેપટોપ રિપેર',Icons.laptop_outlined),
-        _Svc('CCTV Install','सीसीटीवी इंस्टॉल','CCTV ઇન્સ્ટોલ',Icons.videocam_outlined),
-        _Svc('WiFi Install','वाईफाई इंस्टॉल','WiFi ઇન્સ્ટોલ',Icons.wifi_outlined),
-      ]),
-  _Cat(en:'Cleaning',hi:'सफाई',gu:'સફાઈ',
-      icon:Icons.cleaning_services_rounded,
-      color:Color(0xFF0D9488),bg:Color(0xFFCCFBF1),
-      svcs:[
-        _Svc('Deep Cleaning','डीप क्लीनिंग','ડીપ ક્લિનિંગ',Icons.clean_hands_outlined),
-        _Svc('Bathroom Clean','बाथरूम सफाई','બાથરૂમ સફાઈ',Icons.bathroom_outlined),
-        _Svc('Pest Control','कीट नियंत्रण','જીવાત નિયંત્રણ',Icons.pest_control_outlined),
-      ]),
-  _Cat(en:'Events',hi:'इवेंट्स',gu:'ઇવેન્ટ',
-      icon:Icons.celebration_rounded,
-      color:Color(0xFFDB2777),bg:Color(0xFFFCE7F3),
-      svcs:[
-        _Svc('Photographer','फोटोग्राफर','ફોટોગ્રાફર',Icons.camera_alt_outlined),
-        _Svc('DJ','डीजे','DJ',Icons.music_note_outlined),
-        _Svc('Decoration','सजावट','સજાવટ',Icons.auto_awesome_outlined),
-        _Svc('Catering','कैटरिंग','કેટરિંગ',Icons.restaurant_outlined),
-      ]),
-  _Cat(en:'Outdoor',hi:'बाहरी सेवाएं',gu:'આઉટડોર',
-      icon:Icons.park_rounded,
-      color:Color(0xFF16A34A),bg:Color(0xFFDCFCE7),
-      svcs:[
-        _Svc('Gardener','माली','માળી',Icons.yard_outlined),
-        _Svc('Driver on Hire','किराये पर ड्राइवर','ભાડે ડ્રાઇવર',Icons.directions_car_outlined),
-        _Svc('Security Guard','सुरक्षा गार्ड','સુરક્ષા ગાર્ડ',Icons.security_outlined),
-      ]),
+  // 1 ── Home Services
+  _Cat(
+    en: 'Home Services', hi: 'घर सेवाएं', gu: 'ઘર સેવા',
+    icon: Icons.home_repair_service_rounded,
+    color: Color(0xFF7C3AED), bg: Color(0xFFEDE9FE),
+    svcs: [
+      _Svc('Plumber',         'प्लंबर',            'પ્લમ્બર',         Icons.water_drop_outlined),
+      _Svc('Electrician',     'इलेक्ट्रीशियन',      'ઇલેક્ટ્રિશિયન',   Icons.bolt_outlined),
+      _Svc('Carpenter',       'बढ़ई',               'સુથાર',           Icons.carpenter),
+      _Svc('AC Repair',       'एसी रिपेयर',         'AC રિપેર',        Icons.ac_unit_outlined),
+      _Svc('RO Repair',       'आरओ रिपेयर',         'RO રિપેર',        Icons.water_outlined),
+      _Svc('Appliance Repair','अप्लायंस रिपेयर',    'ઉપકરણ રિપેર',    Icons.kitchen_outlined),
+      _Svc('Painter',         'पेंटर',              'પેઇન્ટર',         Icons.format_paint_outlined),
+      _Svc('Cleaner',         'सफाईकर्मी',          'સફાઈ કર્મી',      Icons.cleaning_services_outlined),
+    ],
+  ),
+
+  // 2 ── Vehicle Services
+  _Cat(
+    en: 'Vehicle Services', hi: 'वाहन सेवाएं', gu: 'વાહન સેવા',
+    icon: Icons.directions_car_rounded,
+    color: Color(0xFF0284C7), bg: Color(0xFFE0F2FE),
+    svcs: [
+      _Svc('Car Mechanic',    'कार मैकेनिक',        'કાર મિકેનિક',     Icons.car_repair),
+      _Svc('Bike Mechanic',   'बाइक मैकेनिक',       'બાઇક મિકેનિક',    Icons.two_wheeler),
+      _Svc('Towing Service',  'टोइंग सेवा',          'ટોઇંગ સેવા',      Icons.local_shipping_outlined),
+      _Svc('Puncture Repair', 'पंचर रिपेयर',         'પંચર રિપેર',      Icons.tire_repair),
+      _Svc('Car Wash',        'कार वॉश',             'કાર વૉશ',         Icons.local_car_wash_outlined),
+      _Svc('Battery Jump Start','बैटरी जम्प',        'બૅટ્રી જમ્પ',     Icons.battery_charging_full_outlined),
+    ],
+  ),
+
+  // 3 ── Emergency
+  _Cat(
+    en: 'Emergency', hi: 'आपातकाल', gu: 'કટોકટી',
+    icon: Icons.local_hospital_rounded,
+    color: Color(0xFFDC2626), bg: Color(0xFFFEE2E2),
+    svcs: [
+      _Svc('Ambulance',               'एम्बुलेंस',         'એમ્બ્યુલન્સ',      Icons.local_hospital_outlined),
+      _Svc('First Aid',               'प्राथमिक चिकित्सा', 'પ્રાથમિક સારવાર',  Icons.medical_services_outlined),
+      _Svc('Blood Donor',             'रक्तदाता',           'રક્ત દાતા',         Icons.bloodtype_outlined),
+      _Svc('Fire Help',               'अग्नि सहायता',       'અગ્નિ સહાય',        Icons.local_fire_department_outlined),
+      _Svc('Disaster Support',        'आपदा सहायता',        'આફત સહાય',          Icons.crisis_alert_outlined),
+      _Svc('Mid-Night Vehicle Emergency','मध्यरात्रि वाहन', 'મધ્ય-રાત્રિ વાહન', Icons.directions_car_outlined),
+    ],
+  ),
+
+  // 4 ── Delivery & Pickup
+  _Cat(
+    en: 'Delivery & Pickup', hi: 'डिलीवरी', gu: 'ડિલિવરી',
+    icon: Icons.local_shipping_rounded,
+    color: Color(0xFFD97706), bg: Color(0xFFFEF3C7),
+    svcs: [
+      _Svc('Parcel Pickup',      'पार्सल पिकअप',     'પાર્સલ પિકઅપ',       Icons.local_post_office_outlined),
+      _Svc('Grocery Delivery',   'किराना डिलीवरी',   'કરિયાણા ડિલિવરી',    Icons.shopping_basket_outlined),
+      _Svc('Medicine Delivery',  'दवा डिलीवरी',      'દવા ડિલિવરી',         Icons.medication_outlined),
+      _Svc('Document Courier',   'दस्तावेज़ कूरियर', 'ડૉક્યૂ. કૂરિયર',     Icons.description_outlined),
+      _Svc('Local Shifting',     'लोकल शिफ्टिंग',    'સ્થાનિક શિફ્ટિંગ',   Icons.move_to_inbox_outlined),
+    ],
+  ),
+
+  // 5 ── Technical Services
+  _Cat(
+    en: 'Technical', hi: 'तकनीकी', gu: 'ટેકનિકલ',
+    icon: Icons.build_rounded,
+    color: Color(0xFF0891B2), bg: Color(0xFFCFFAFE),
+    svcs: [
+      _Svc('Mobile Repair',  'मोबाइल रिपेयर',  'મોબાઇલ રિપેર',  Icons.phone_android_outlined),
+      _Svc('Laptop Repair',  'लैपटॉप रिपेयर',  'લેપટોપ રિપેર',  Icons.laptop_outlined),
+      _Svc('CCTV Install',   'सीसीटीवी इंस्टॉल','CCTV ઇન્સ્ટોલ', Icons.videocam_outlined),
+      _Svc('WiFi Install',   'वाईफाई इंस्टॉल', 'WiFi ઇન્સ્ટોલ', Icons.wifi_outlined),
+      _Svc('Software Help',  'सॉफ्टवेयर सहायता','સૉફ્ટ. સહાય',   Icons.computer_outlined),
+    ],
+  ),
+
+  // 6 ── Personal Assistance
+  _Cat(
+    en: 'Personal Assistance', hi: 'व्यक्तिगत सहायता', gu: 'વ્યક્તિગત',
+    icon: Icons.support_agent_rounded,
+    color: Color(0xFF7C3AED), bg: Color(0xFFF3E8FF),
+    svcs: [
+      _Svc('Home Tutor',        'होम ट्यूटर',        'હોમ ટ્યૂટર',    Icons.menu_book_outlined),
+      _Svc('Fitness Trainer',   'फिटनेस ट्रेनर',     'ફિટ. ટ્રેઇનર',  Icons.fitness_center_outlined),
+      _Svc('Yoga Instructor',   'योग प्रशिक्षक',      'યોગ ઇન્સ.',     Icons.self_improvement_outlined),
+      _Svc('Caretaker',         'देखभाल करने वाला',  'કૅરટૅકર',       Icons.volunteer_activism_outlined),
+      _Svc('Babysitter',        'बेबीसिटर',           'બૅબીસિટર',      Icons.child_care_outlined),
+    ],
+  ),
+
+  // 7 ── Events & Occasions
+  _Cat(
+    en: 'Events', hi: 'इवेंट्स', gu: 'ઇવેન્ટ',
+    icon: Icons.celebration_rounded,
+    color: Color(0xFFDB2777), bg: Color(0xFFFCE7F3),
+    svcs: [
+      _Svc('Photographer',  'फोटोग्राफर', 'ફોટોગ્રાફર', Icons.camera_alt_outlined),
+      _Svc('Videographer',  'वीडियोग्राफर','વિડિઓ.',     Icons.videocam_outlined),
+      _Svc('DJ',            'डीजे',        'DJ',          Icons.music_note_outlined),
+      _Svc('Decoration',    'सजावट',       'સજાવટ',       Icons.auto_awesome_outlined),
+      _Svc('Catering',      'कैटरिंग',     'કેટરિંગ',     Icons.restaurant_outlined),
+    ],
+  ),
+
+  // 8 ── Construction
+  _Cat(
+    en: 'Construction', hi: 'निर्माण', gu: 'બાંધકામ',
+    icon: Icons.construction_rounded,
+    color: Color(0xFFB45309), bg: Color(0xFFFEF9C3),
+    svcs: [
+      _Svc('Mason',           'राजमिस्त्री',     'કડિયો',         Icons.foundation_outlined),
+      _Svc('Interior Design', 'इंटीरियर डिज़ाइन','ઇન્ટ. ડિઝાઇન',  Icons.design_services_outlined),
+      _Svc('Tiles Worker',    'टाइल्स मजदूर',    'ટાઇલ્સ',        Icons.grid_on_outlined),
+      _Svc('Architect Help',  'आर्किटेक्ट',      'આર્કિ.',         Icons.architecture_outlined),
+      _Svc('Fabrication',     'फैब्रिकेशन',       'ફૅબ્રિ.',       Icons.handyman_outlined),
+    ],
+  ),
+
+  // 9 ── Cleaning
+  _Cat(
+    en: 'Cleaning', hi: 'सफाई', gu: 'સફાઈ',
+    icon: Icons.cleaning_services_rounded,
+    color: Color(0xFF0D9488), bg: Color(0xFFCCFBF1),
+    svcs: [
+      _Svc('Deep Cleaning',      'डीप क्लीनिंग',    'ડીપ ક્લિ.',       Icons.clean_hands_outlined),
+      _Svc('Bathroom Clean',     'बाथरूम सफाई',     'બાથ. સફાઈ',       Icons.bathroom_outlined),
+      _Svc('Sofa Cleaning',      'सोफा सफाई',        'સોફા ક્લિ.',      Icons.chair_outlined),
+      _Svc('Pest Control',       'कीट नियंत्रण',    'જીવાત',           Icons.pest_control_outlined),
+      _Svc('Water Tank Cleaning','टैंक सफाई',        'ટૅન્ક ક્લિ.',     Icons.water_damage_outlined),
+    ],
+  ),
+
+  // 10 ── Professional
+  _Cat(
+    en: 'Professional', hi: 'पेशेवर सेवाएं', gu: 'વ્યાવ. સેવા',
+    icon: Icons.business_center_rounded,
+    color: Color(0xFF1D4ED8), bg: Color(0xFFDBEAFE),
+    svcs: [
+      _Svc('Lawyer Consult', 'वकील परामर्श',  'વકીલ.',    Icons.gavel_outlined),
+      _Svc('CA / Tax Help',  'CA / टैक्स',    'CA / ટૅક્સ',Icons.account_balance_outlined),
+      _Svc('Insurance',      'बीमा',           'વીમો',     Icons.shield_outlined),
+      _Svc('Real Estate',    'रियल एस्टेट',    'રિ. એસ.',  Icons.apartment_outlined),
+    ],
+  ),
+
+  // 11 ── Outdoor & More
+  _Cat(
+    en: 'Outdoor & More', hi: 'बाहरी सेवाएं', gu: 'આઉટડોર',
+    icon: Icons.park_rounded,
+    color: Color(0xFF16A34A), bg: Color(0xFFDCFCE7),
+    svcs: [
+      _Svc('Gardener',       'माली',               'માળી',          Icons.yard_outlined),
+      _Svc('Security Guard', 'सुरक्षा गार्ड',       'સુ. ગાર્ડ',    Icons.security_outlined),
+      _Svc('Driver on Hire', 'किराये पर ड्राइवर',  'ભાડે ડ્રાઇ.',  Icons.directions_car_outlined),
+      _Svc('Scrap Collector','कबाड़ीवाला',           'ભંગાર.',       Icons.recycling_outlined),
+    ],
+  ),
+
+  // 12 ── Community Help
+  _Cat(
+    en: 'Community Help', hi: 'सामुदायिक सहायता', gu: 'સમુ. સહાય',
+    icon: Icons.groups_rounded,
+    color: Color(0xFF9333EA), bg: Color(0xFFF3E8FF),
+    svcs: [
+      _Svc('Volunteer Help',  'स्वयंसेवी',      'સ્વૈ. સહા.',  Icons.favorite_outline_rounded),
+      _Svc('Senior Support',  'बुजुर्ग सहायता', 'વૃ. સહાય',    Icons.elderly_outlined),
+      _Svc('Student Helper',  'छात्र सहायक',    'વિ. સહ.',     Icons.school_outlined),
+      _Svc('NGO Support',     'एनजीओ सहायता',   'NGO સહ.',     Icons.handshake_outlined),
+    ],
+  ),
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
