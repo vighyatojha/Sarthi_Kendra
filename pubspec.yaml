@@ -18,10 +18,9 @@ dependencies:
   firebase_database: ^10.4.9
   firebase_auth: ^4.17.8
   cloud_firestore: ^4.15.8
-  firebase_storage: ^11.6.8
   firebase_messaging: ^14.7.19
 
-  # Google Sign-In  ← ADD THIS (was missing)
+  # Google Sign-In
   google_sign_in: ^6.2.1
   google_maps_flutter: ^2.5.3
   geolocator: ^12.0.0
@@ -36,8 +35,10 @@ dependencies:
   shimmer: ^3.0.0
   lottie: ^3.1.0
 
-  # Image
+  # Image / audio
   image_picker: ^1.0.7
+  audioplayers: ^6.1.0         # play the customer's voice note
+  http: ^1.2.2                 # Cloudinary uploads + push Worker calls
 
   # Utils
   shared_preferences: ^2.2.3

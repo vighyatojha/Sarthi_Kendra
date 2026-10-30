@@ -551,6 +551,7 @@ class _VerifTile extends StatelessWidget {
 }
 
 // ── Customer Reviews Section ──────────────────────────────────────────────────
+// ── Customer Reviews Section — Hierarchical Grid ──────────────────────────────
 class _CustomerReviewsSection extends StatelessWidget {
   final String uid;
   const _CustomerReviewsSection({required this.uid});
@@ -572,75 +573,224 @@ class _CustomerReviewsSection extends StatelessWidget {
         return Container(
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(color: _border),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 12,
-                  offset: const Offset(0, 3))
-            ],
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 3))],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+              child: Row(children: [
+                const _RowHead(icon: Icons.rate_review_rounded, label: 'Customer Reviews'),
+                const Spacer(),
+                if (docs.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                        color: _purple.withOpacity(0.08), borderRadius: BorderRadius.circular(12)),
+                    child: Text('${docs.length} total',
+                        style: const TextStyle(color: _purple, fontSize: 10, fontWeight: FontWeight.w700)),
+                  ),
+              ]),
+            ),
+            const SizedBox(height: 10),
+            if (docs.isEmpty)
               Padding(
-                padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
-                child: Row(children: [
-                  const _RowHead(
-                      icon: Icons.rate_review_rounded,
-                      label: 'Customer Reviews'),
-                  const Spacer(),
-                  if (docs.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                          color: _purple.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(20)),
-                      child: Text('${docs.length} reviews',
-                          style: const TextStyle(
-                              color: _purple,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700)),
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFF8F7FF),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _border)),
+                  child: const Column(children: [
+                    Icon(Icons.star_outline_rounded, color: _t3, size: 24),
+                    SizedBox(height: 6),
+                    Text('No reviews yet', style: TextStyle(color: _t2, fontSize: 12, fontWeight: FontWeight.w600)),
+                    SizedBox(height: 2),
+                    Text('Complete jobs to receive reviews', style: TextStyle(color: _t3, fontSize: 10)),
+                  ]),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
+                child: Column(children: [
+                  // Featured: first review full-width
+                  _ReviewFeaturedCard(doc: docs.first),
+                  if (docs.length > 1) ...[
+                    const SizedBox(height: 8),
+                    // 2-column compact grid for the rest
+                    GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 7,
+                        mainAxisSpacing: 7,
+                        childAspectRatio: 1.15,
+                      ),
+                      itemCount: docs.length - 1,
+                      itemBuilder: (_, i) => _ReviewGridCard(doc: docs[i + 1]),
                     ),
+                  ],
                 ]),
               ),
-              const SizedBox(height: 14),
-              if (docs.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 24, horizontal: 16),
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFF8F7FF),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: _border)),
-                    child: const Column(children: [
-                      Icon(Icons.star_outline_rounded,
-                          color: _t3, size: 32),
-                      SizedBox(height: 8),
-                      Text('No reviews yet',
-                          style: TextStyle(
-                              color: _t2,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600)),
-                      SizedBox(height: 4),
-                      Text('Complete jobs to receive reviews',
-                          style: TextStyle(color: _t3, fontSize: 11)),
-                    ]),
-                  ),
-                )
-              else
-                ...docs.asMap().entries.map((e) {
-                  final isLast = e.key == docs.length - 1;
-                  return _ReviewTile(doc: e.value, isLast: isLast);
-                }),
-            ],
-          ),
+          ]),
         );
       },
+    );
+  }
+}
+
+String _reviewAgo(DateTime dt) {
+  final diff = DateTime.now().difference(dt);
+  if (diff.inMinutes < 1) return 'now';
+  if (diff.inHours < 24) return '${diff.inHours}h';
+  if (diff.inDays < 7) return '${diff.inDays}d';
+  return '${dt.day}/${dt.month}/${dt.year % 100}';
+}
+
+// Full-width featured review card
+class _ReviewFeaturedCard extends StatelessWidget {
+  final QueryDocumentSnapshot doc;
+  const _ReviewFeaturedCard({required this.doc});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = doc.data() as Map<String, dynamic>;
+    final name = (d['reviewerName'] ?? d['userName'] ?? 'Customer') as String;
+    final stars = ((d['starRating'] ?? d['userRating'] ?? 0) as num).round().clamp(1, 5);
+    final svc = (d['serviceName'] ?? '') as String;
+    final note = (d['additionalNote'] ?? d['userReview'] ?? '') as String;
+    final answers = d['answers'] as Map<String, dynamic>? ?? {};
+    final firstAnswer = answers.values.isNotEmpty ? answers.values.first.toString() : null;
+    final text = note.isNotEmpty ? note : firstAnswer;
+    final ts = (d['createdAt'] as Timestamp?)?.toDate()?.toLocal();
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : 'C';
+    final sc = stars >= 4 ? _green : (stars == 3 ? _amber : _red);
+
+    return Container(
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F7FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [Color(0xFF1A3A6B), Color(0xFF0D6E6E)]),
+            shape: BoxShape.circle,
+          ),
+          child: Center(child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800))),
+        ),
+        const SizedBox(width: 9),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(name, style: const TextStyle(color: _t1, fontSize: 12, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(color: sc.withOpacity(0.10), borderRadius: BorderRadius.circular(8), border: Border.all(color: sc.withOpacity(0.22))),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.star_rounded, color: sc, size: 10),
+                const SizedBox(width: 2),
+                Text('$stars.0', style: TextStyle(color: sc, fontSize: 10, fontWeight: FontWeight.w800)),
+              ]),
+            ),
+          ]),
+          if (svc.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Row(children: [
+              const Icon(Icons.home_repair_service_rounded, size: 9, color: _t3),
+              const SizedBox(width: 2),
+              Text(svc, style: const TextStyle(color: _t3, fontSize: 9)),
+            ]),
+          ],
+          if (text != null && text.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('"$text"',
+                style: const TextStyle(color: _t2, fontSize: 11, fontStyle: FontStyle.italic, height: 1.4),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+          ],
+          if (ts != null) ...[
+            const SizedBox(height: 4),
+            Text(_reviewAgo(ts), style: const TextStyle(color: _t3, fontSize: 9)),
+          ],
+        ])),
+      ]),
+    );
+  }
+}
+
+// Compact grid card (2-column)
+class _ReviewGridCard extends StatelessWidget {
+  final QueryDocumentSnapshot doc;
+  const _ReviewGridCard({required this.doc});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = doc.data() as Map<String, dynamic>;
+    final name = (d['reviewerName'] ?? d['userName'] ?? 'Customer') as String;
+    final stars = ((d['starRating'] ?? d['userRating'] ?? 0) as num).round().clamp(1, 5);
+    final svc = (d['serviceName'] ?? '') as String;
+    final note = (d['additionalNote'] ?? d['userReview'] ?? '') as String;
+    final answers = d['answers'] as Map<String, dynamic>? ?? {};
+    final firstAnswer = answers.values.isNotEmpty ? answers.values.first.toString() : null;
+    final text = note.isNotEmpty ? note : firstAnswer;
+    final ts = (d['createdAt'] as Timestamp?)?.toDate()?.toLocal();
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : 'C';
+    final sc = stars >= 4 ? _green : (stars == 3 ? _amber : _red);
+
+    return Container(
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F7FF),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 26, height: 26,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF1A3A6B), Color(0xFF0D6E6E)]),
+              shape: BoxShape.circle,
+            ),
+            child: Center(child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800))),
+          ),
+          const SizedBox(width: 5),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, style: const TextStyle(color: _t1, fontSize: 10, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+            if (svc.isNotEmpty)
+              Text(svc, style: const TextStyle(color: _t3, fontSize: 8), overflow: TextOverflow.ellipsis),
+          ])),
+        ]),
+        const SizedBox(height: 6),
+        Row(children: [
+          ...List.generate(5, (i) => Icon(
+            i < stars ? Icons.star_rounded : Icons.star_outline_rounded,
+            color: i < stars ? sc : _t3, size: 9,
+          )),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(color: sc.withOpacity(0.10), borderRadius: BorderRadius.circular(4)),
+            child: Text('$stars.0', style: TextStyle(color: sc, fontSize: 9, fontWeight: FontWeight.w800)),
+          ),
+        ]),
+        if (text != null && text.isNotEmpty) ...[
+          const SizedBox(height: 5),
+          Expanded(
+            child: Text('"$text"',
+                style: const TextStyle(color: _t2, fontSize: 9, fontStyle: FontStyle.italic, height: 1.3),
+                overflow: TextOverflow.ellipsis, maxLines: 3),
+          ),
+        ] else const Spacer(),
+        if (ts != null)
+          Text(_reviewAgo(ts), style: const TextStyle(color: _t3, fontSize: 8)),
+      ]),
     );
   }
 }

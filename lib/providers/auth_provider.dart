@@ -18,6 +18,9 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:firebase_database/firebase_database.dart';
 
 import '../models/helper_model.dart';
+import '../core/job_api.dart';
+import '../core/push_tokens.dart';
+import '../services/helper_location_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   final FirebaseAuth      _auth   = FirebaseAuth.instance;
@@ -58,6 +61,7 @@ class AuthProvider extends ChangeNotifier {
       } else {
         await _fetchHelper(user.uid);
         _subscribeNotifications(user.uid);
+        PushTokens.instance.start(app: 'helper');
         _initialized = true;
         notifyListeners();
       }
@@ -174,10 +178,16 @@ class AuthProvider extends ChangeNotifier {
   }
 
   // ── Toggle online ─────────────────────────────────────────────
-  Future<void> toggleOnlineStatus() async {
+  // Going online first saves the helper's position (needed for 5 km matching).
+  // Returns null on success, or a message to show the helper.
+  Future<String?> toggleOnlineStatus() async {
     final uid = _auth.currentUser?.uid;
-    if (uid == null || _helper == null) return;
+    if (uid == null || _helper == null) return 'Please sign in again.';
     final next = !_helper!.isOnline;
+    if (next) {
+      final problem = await HelperLocationService.instance.goOnline();
+      if (problem != null) return problem;
+    }
     _helper = _helper!.copyWith(isOnline: next);
     notifyListeners();
     try {
@@ -186,7 +196,10 @@ class AuthProvider extends ChangeNotifier {
     } catch (_) {
       _helper = _helper!.copyWith(isOnline: !next);
       notifyListeners();
+      return 'Could not update your status. Check your internet.';
     }
+    if (!next) await HelperLocationService.instance.goOffline();
+    return null;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -204,28 +217,16 @@ class AuthProvider extends ChangeNotifier {
       String emailToUse = identifier.trim();
 
       if (!emailToUse.contains('@')) {
-        final q = await _db
-            .collection('helpers')
-            .where('username', isEqualTo: emailToUse.toLowerCase())
-            .limit(1)
-            .get();
-        if (q.docs.isEmpty) {
-          _errorMessage = 'No account found for "$emailToUse". Try using your email.';
-          _isLoading    = false;
-          notifyListeners();
-          return false;
-        }
-        emailToUse = (q.docs.first.data()['email'] as String?) ?? '';
-        if (emailToUse.isEmpty) {
-          _errorMessage = 'Account found but email is missing. Contact support.';
-          _isLoading    = false;
-          notifyListeners();
-          return false;
-        }
+        // Helper profiles are private (firestore.rules), so a username can't
+        // be looked up before sign-in.
+        _errorMessage = 'Please sign in with your email address.';
+        _isLoading    = false;
+        notifyListeners();
+        return false;
       }
 
       final cred = await _auth.signInWithEmailAndPassword(
-          email: emailToUse, password: password.trim());
+          email: emailToUse, password: password);
       await _fetchHelper(cred.user!.uid);
       _subscribeNotifications(cred.user!.uid);
       _isLoading = false;
@@ -345,31 +346,18 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final eqry = await _db.collection('helpers')
-          .where('email', isEqualTo: email.trim().toLowerCase()).limit(1).get();
-      if (eqry.docs.isNotEmpty) {
-        _errorMessage = 'This email is already registered.';
-        _isLoading = false; notifyListeners(); return false;
-      }
-      if (phone.isNotEmpty) {
-        final pqry = await _db.collection('helpers')
-            .where('phone', isEqualTo: phone.trim()).limit(1).get();
-        if (pqry.docs.isNotEmpty) {
-          _errorMessage = 'This phone number is already registered.';
-          _isLoading = false; notifyListeners(); return false;
-        }
-      }
-      final uname = (username?.trim().toLowerCase()) ??
-          name.trim().toLowerCase().replaceAll(' ', '_');
-      final uqry = await _db.collection('helpers')
-          .where('username', isEqualTo: uname).limit(1).get();
-      if (uqry.docs.isNotEmpty) {
-        _errorMessage = 'This username is taken. Choose another.';
-        _isLoading = false; notifyListeners(); return false;
+      // Duplicate email is rejected by Firebase Auth itself. The username is
+      // only a display handle now (sign-in is by email).
+      var uname = (username?.trim().toLowerCase()) ??
+          name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '_');
+      if (uname.length > 20) uname = uname.substring(0, 20);
+      if (!RegExp(r'^[a-z0-9_.]{3,20}$').hasMatch(uname)) {
+        // e.g. a name typed in Hindi/Gujarati: fall back to a generated username.
+        uname = 'sk${DateTime.now().millisecondsSinceEpoch % 100000000}';
       }
 
       final cred = await _auth.createUserWithEmailAndPassword(
-          email: email.trim(), password: password.trim());
+          email: email.trim(), password: password);
       final uid = cred.user!.uid;
       await cred.user!.updateDisplayName(name.trim());
 
@@ -421,7 +409,7 @@ class AuthProvider extends ChangeNotifier {
       };
 
       await _db.collection('helpers').doc(uid).set(data);
-      _helper    = HelperModel.fromMap(data, uid);
+      await _fetchHelper(uid); // live stream (server timestamps resolve here)
       _subscribeNotifications(uid);
       _isLoading = false;
       notifyListeners();
@@ -445,39 +433,19 @@ class AuthProvider extends ChangeNotifier {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return false;
     try {
-      await _db.collection('helpers').doc(uid).update({
-        // ← FIX 1 (ROOT CAUSE): Was 'kycData' — admin reads from 'kycDocuments'
-        //   The entire KYC modal in admin does: const docs = h.kycDocuments || {}
-        //   Saving under 'kycData' means docs is always {}, showing '—' for everything
-        'kycDocuments':   kycData,
-
-        // ← FIX 2 (ROOT CAUSE): Was 'status': 'submitted'
-        //   Admin filters with: allHelpers.filter(h => h.kycStatus === 'pending')
-        //   'status' and 'kycStatus' are TWO DIFFERENT FIELDS.
-        //   'status' being 'submitted' has zero effect on KYC visibility.
-        //   Without this line, admin will always show "No pending KYC applications".
-        'kycStatus':      'pending',
-
-        // ← FIX 3: kycDone should remain false until admin APPROVES, not on submission
-        //   Setting kycDone:true here would incorrectly mark KYC as complete
-        //   before admin review
-        'kycDone':        false,
-
-        // ← FIX 4: Added kycSubmittedAt — admin modal displays this field:
-        //   h.kycSubmittedAt?.toDate ? h.kycSubmittedAt.toDate().toLocaleDateString() : 'N/A'
-        //   Without this, "Submitted On" always shows 'N/A'
-        'kycSubmittedAt': FieldValue.serverTimestamp(),
-
-        'updatedAt':      FieldValue.serverTimestamp(),
-      });
-
-      // Update local model immediately so UI reflects pending state
+      // Aadhaar and PAN go to helpers_private/{uid} (only admins can read it);
+      // the same batch sets kycStatus='pending'. firestore.rules checks formats.
+      await JobApi.instance.submitKyc(
+        aadhaar: kycData['aadhaar'] ?? kycData['aadharNumber'] ?? '',
+        pan: kycData['pan'] ?? kycData['panNumber'] ?? '',
+      );
       if (_helper != null) {
         _helper = _helper!.copyWith(kycStatus: 'pending');
         notifyListeners();
       }
-
       return true;
+    } on ApiException catch (e) {
+      _errorMessage = e.message; notifyListeners(); return false;
     } catch (e) {
       _errorMessage = _friendlyError(e); notifyListeners(); return false;
     }
@@ -487,10 +455,9 @@ class AuthProvider extends ChangeNotifier {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
     try {
+      // kycStatus is server-owned (it already defaults to 'not_submitted').
       await _db.collection('helpers').doc(uid).update({
         'kycSkipped': true,
-        // ← FIX: Explicitly set kycStatus so admin filtering stays clean
-        'kycStatus':  'not_submitted',
         'updatedAt':  FieldValue.serverTimestamp(),
       });
     } catch (_) {}
@@ -548,6 +515,8 @@ class AuthProvider extends ChangeNotifier {
       try {
         await _db.collection('helpers').doc(uid).update({'isOnline': false});
       } catch (_) {}
+      await HelperLocationService.instance.goOffline();
+      await PushTokens.instance.stop();
     }
     _cancelStreams();
     _helper = null; _errorMessage = null; _unreadCount = 0;

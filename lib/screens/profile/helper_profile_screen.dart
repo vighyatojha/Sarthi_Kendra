@@ -1191,70 +1191,84 @@ class _AchievementsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (uid.isEmpty) return const SizedBox.shrink();
+
     return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('helpers')
-          .doc(uid)
-          .snapshots(),
-      builder: (ctx, snap) {
-        final d       = snap.data?.data() as Map<String, dynamic>? ?? {};
-        final rating  = _safeDouble(d['rating']);
+      stream: FirebaseFirestore.instance.collection('helpers').doc(uid).snapshots(),
+      builder: (ctx, helperSnap) {
+        final d       = helperSnap.data?.data() as Map<String, dynamic>? ?? {};
         final done    = _safeInt(d['completedJobs']);
         final balance = _safeDouble(d['totalBalance']);
-        final reviews = _safeInt(d['totalReviews']);
-        final rank    = d['rank']   as String? ?? '';
+        final rank    = d['rank'] as String? ?? '';
         final streak  = _safeInt(d['streak']);
 
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _SectionTitle(hi ? 'उपलब्धियां' : 'Achievements'),
-          const SizedBox(height: 8),
-          Row(children: [
-            _StatCard(
-              icon: Icons.star_rounded, iconColor: _P.amber,
-              bgColor: const Color(0xFFFFFBEB),
-              value: rating == 0 ? '—' : rating.toStringAsFixed(1),
-              label: hi ? 'रेटिंग' : 'Rating',
-              sub: reviews > 0
-                  ? '$reviews ${hi ? 'समीक्षाएं' : 'reviews'}' : '',
-            ),
-            const SizedBox(width: 8),
-            _StatCard(
-              icon: Icons.check_circle_rounded, iconColor: _P.teal,
-              bgColor: const Color(0xFFF0FDF4),
-              value: '$done',
-              label: hi ? 'जॉब्स' : 'Jobs Done',
-              sub: done > 0
-                  ? '${(done * 0.95).round()}% ${hi ? 'सफलता' : 'success'}'
-                  : '',
-            ),
-            const SizedBox(width: 8),
-            _StatCard(
-              icon: Icons.account_balance_wallet_rounded,
-              iconColor: _P.violet,
-              bgColor: _P.lavender.op(0.5),
-              value: '₹${balance.toStringAsFixed(0)}',
-              label: hi ? 'कुल कमाई' : 'Earned',
-              sub: '',
-            ),
-          ]),
-          if (rank.isNotEmpty || streak > 0) ...[
-            const SizedBox(height: 8),
-            Row(children: [
-              if (rank.isNotEmpty)
-                Expanded(child: _BadgeCard(
-                  icon: Icons.military_tech_rounded, color: _P.blue,
-                  label: hi ? 'रैंक' : 'Rank', value: rank,
-                )),
-              if (rank.isNotEmpty && streak > 0) const SizedBox(width: 8),
-              if (streak > 0)
-                Expanded(child: _BadgeCard(
-                  icon: Icons.local_fire_department_rounded, color: _P.rose,
-                  label: hi ? 'स्ट्रीक' : 'Streak',
-                  value: '$streak ${hi ? 'दिन' : 'days'}',
-                )),
-            ]),
-          ],
-        ]);
+        // Live rating from reviews subcollection — not the stale stored field
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collectionGroup('user_to_helper')
+              .where('revieweeId', isEqualTo: uid)
+              .snapshots(),
+          builder: (ctx2, reviewSnap) {
+            double sum = 0;
+            int reviewCount = 0;
+            for (final doc in reviewSnap.data?.docs ?? []) {
+              final rd = doc.data() as Map<String, dynamic>;
+              final r = ((rd['starRating'] ?? rd['userRating']) as num?)
+                  ?.toDouble() ?? 0;
+              if (r > 0) { sum += r; reviewCount++; }
+            }
+            final liveRating = reviewCount > 0 ? sum / reviewCount : 0.0;
+
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              _SectionTitle(hi ? 'उपलब्धियां' : 'Achievements'),
+              const SizedBox(height: 8),
+              Row(children: [
+                _StatCard(
+                  icon: Icons.star_rounded, iconColor: _P.amber,
+                  bgColor: const Color(0xFFFFFBEB),
+                  value: reviewCount == 0 ? '—' : liveRating.toStringAsFixed(1),
+                  label: hi ? 'रेटिंग' : 'Rating',
+                  sub: reviewCount > 0
+                      ? '$reviewCount ${hi ? 'समीक्षाएं' : 'reviews'}' : '',
+                ),
+                const SizedBox(width: 8),
+                _StatCard(
+                  icon: Icons.check_circle_rounded, iconColor: _P.teal,
+                  bgColor: const Color(0xFFF0FDF4),
+                  value: '$done',
+                  label: hi ? 'जॉब्स' : 'Jobs Done',
+                  sub: done > 0
+                      ? '${(done * 0.95).round()}% ${hi ? 'सफलता' : 'success'}' : '',
+                ),
+                const SizedBox(width: 8),
+                _StatCard(
+                  icon: Icons.account_balance_wallet_rounded,
+                  iconColor: _P.violet,
+                  bgColor: _P.lavender.op(0.5),
+                  value: '₹${balance.toStringAsFixed(0)}',
+                  label: hi ? 'कुल कमाई' : 'Earned',
+                  sub: '',
+                ),
+              ]),
+              if (rank.isNotEmpty || streak > 0) ...[
+                const SizedBox(height: 8),
+                Row(children: [
+                  if (rank.isNotEmpty)
+                    Expanded(child: _BadgeCard(
+                      icon: Icons.military_tech_rounded, color: _P.blue,
+                      label: hi ? 'रैंक' : 'Rank', value: rank,
+                    )),
+                  if (rank.isNotEmpty && streak > 0) const SizedBox(width: 8),
+                  if (streak > 0)
+                    Expanded(child: _BadgeCard(
+                      icon: Icons.local_fire_department_rounded, color: _P.rose,
+                      label: hi ? 'स्ट्रीक' : 'Streak',
+                      value: '$streak ${hi ? 'दिन' : 'days'}',
+                    )),
+                ]),
+              ],
+            ]);
+          },
+        );
       },
     );
   }

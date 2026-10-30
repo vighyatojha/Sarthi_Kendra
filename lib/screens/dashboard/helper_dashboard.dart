@@ -26,6 +26,8 @@ import '../support/support_screen.dart';
 import '../earning/earnings_screen.dart';
 import '../profile/helper_profile_screen.dart';
 import '../../widgets/notification_bell.dart';
+import '../../services/helper_location_service.dart';
+import '../requests/requests_home_screen.dart';
 
 // ─── Unified booking status constants ────────────────────────────────────────
 // NEVER use: active, declined, timeout, navigating, started, completing,
@@ -66,7 +68,7 @@ int _safeInt(dynamic v) =>
 // ─── Amount helper: NEVER show platformFee to helper — only baseAmount ───────
 // platformFee is app revenue and must stay internal / admin-only.
 double _helperAmount(Map<String, dynamic> d) =>
-    _safeDouble(d['baseAmount']);
+    _safeDouble((d['agreedAmount'] ?? d['baseAmount']));
 
 // ─── Payment method badge ────────────────────────────────────────────────────
 Widget _paymentBadge(String? method) {
@@ -119,7 +121,6 @@ class _HelperDashboardState extends State<HelperDashboard>
   StreamSubscription<Position>? _locSub;
   Position? _myPos;
 
-  StreamSubscription<QuerySnapshot>? _badgeSub;
   int _pendingCount = 0;
 
   @override
@@ -133,6 +134,7 @@ class _HelperDashboardState extends State<HelperDashboard>
       context.read<AuthProvider>().refreshProfile();
       _initLocation();
       _initBadge();
+      _saveLanguage();
     });
   }
 
@@ -140,7 +142,7 @@ class _HelperDashboardState extends State<HelperDashboard>
   void dispose() {
     _fadeCtrl.dispose();
     _locSub?.cancel();
-    _badgeSub?.cancel();
+    nearbyRequestCount.removeListener(_onBadge);
     super.dispose();
   }
 
@@ -160,28 +162,33 @@ class _HelperDashboardState extends State<HelperDashboard>
     ).listen(_pushLocation);
   }
 
+  // Position is shared with the server only while the helper is Available,
+  // in a private collection (never in the public helper profile).
   void _pushLocation(Position pos) {
     if (mounted) setState(() => _myPos = pos);
-    final uid = context.read<AuthProvider>().helper?.uid ?? '';
-    if (uid.isEmpty) return;
-    FirebaseFirestore.instance.collection('helpers').doc(uid).update({
-      'location': GeoPoint(pos.latitude, pos.longitude),
-      'locationUpdatedAt': FieldValue.serverTimestamp(),
-    }).catchError((_) {});
+    final isOnline = context.read<AuthProvider>().helper?.isOnline ?? false;
+    HelperLocationService.instance.report(pos, isOnline: isOnline);
   }
 
-  // AFTER — counts only THIS helper's bookings
-  void _initBadge() {
+  // Server uses this to send notifications in the helper's language.
+  void _saveLanguage() {
     final uid = context.read<AuthProvider>().helper?.uid ?? '';
     if (uid.isEmpty) return;
-    _badgeSub = FirebaseFirestore.instance
-        .collection('bookings')
-        .where('helperId', isEqualTo: uid)
-        .where('status', whereIn: ['booked', 'pending'])
-        .snapshots()
-        .listen((s) {
-      if (mounted) setState(() => _pendingCount = s.docs.length);
-    });
+    final code = context.read<LanguageProvider>().locale.languageCode;
+    FirebaseFirestore.instance.collection('helpers').doc(uid).update({'lang': code}).catchError((_) {});
+  }
+
+  // Badge = new nearby requests this helper can still price. The Jobs tab
+  // (always built inside the IndexedStack) keeps nearbyRequestCount current.
+  void _initBadge() {
+    nearbyRequestCount.addListener(_onBadge);
+    _onBadge();
+  }
+
+  void _onBadge() {
+    if (mounted && _pendingCount != nearbyRequestCount.value) {
+      setState(() => _pendingCount = nearbyRequestCount.value);
+    }
   }
 
   void _switchTab(int i) {
@@ -207,7 +214,7 @@ class _HelperDashboardState extends State<HelperDashboard>
     final lang = context.watch<LanguageProvider>();
 
     final pages = [
-      _JobsTab(myPos: _myPos, pendingCount: _pendingCount, onGoHome: () => _switchTab(1)),
+      const RequestsHomeScreen(),
       _HomeTab(myPos: _myPos, onGoJobs: () => _switchTab(0), pendingCount: _pendingCount),
       const EarningsScreen(),
       const TrustSafetyScreen(),
@@ -3150,9 +3157,13 @@ class _OnlineToggleBtn extends StatelessWidget {
         }
 
         return GestureDetector(
-          onTap: () {
+          onTap: () async {
             HapticFeedback.mediumImpact();
-            context.read<AuthProvider>().toggleOnlineStatus();
+            final messenger = ScaffoldMessenger.of(context);
+            final problem = await context.read<AuthProvider>().toggleOnlineStatus();
+            if (problem != null) {
+              messenger.showSnackBar(SnackBar(content: Text(problem), behavior: SnackBarBehavior.floating));
+            }
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 250),
@@ -3277,17 +3288,6 @@ class _KycUnderReviewState extends State<_KycUnderReview> {
         _KycBtn(
           label: 'Check Status', icon: Icons.refresh_rounded, outline: true,
           onTap: (ctx) => ctx.read<AuthProvider>().refreshProfile(),
-        ),
-        _KycBtn(
-          label: 'Go to Dashboard',
-          icon: Icons.dashboard_rounded,
-          onTap: (ctx) {
-            Navigator.of(ctx).pushAndRemoveUntil(
-              MaterialPageRoute(
-                  builder: (_) => const HelperDashboard(bypassKycGate: true)),
-                  (_) => false,
-            );
-          },
         ),
       ]);
 }

@@ -7,9 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/cloudinary.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/language_provider.dart';
 import '../../models/helper_model.dart';
@@ -307,14 +307,21 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (xf == null || !mounted) return;
     setState(() { _photoFile = File(xf.path); _uploadingPhoto = true; });
     try {
-      final uid = context.read<AuthProvider>().helper?.uid ?? 'tmp';
-      final ref = FirebaseStorage.instance.ref('helpers/$uid/profile.jpg');
-      await ref.putFile(_photoFile!, SettableMetadata(contentType: 'image/jpeg'));
-      final url = await ref.getDownloadURL();
+      final uid = context.read<AuthProvider>().helper?.uid ?? '';
+      if (uid.isEmpty) return;
+      // Firebase Storage needs the paid plan; photos go to Cloudinary instead.
+      final url = await Cloudinary.upload(_photoFile!, folder: 'profiles/$uid');
       await FirebaseFirestore.instance
           .collection('helpers').doc(uid).update({'photoUrl': url});
       if (mounted) setState(() => _photoUrl = url);
-    } catch (_) {}
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e is CloudinaryException ? e.message : 'Photo upload failed. Please try again.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
     finally { if (mounted) setState(() => _uploadingPhoto = false); }
   }
 
